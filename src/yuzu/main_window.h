@@ -9,20 +9,20 @@
 #include <memory>
 #include <optional>
 
-#include <filesystem>
-#include <QMainWindow>
-#include <QMessageBox>
-#include <QPushButton>
-#include <QTimer>
 #include <array>
 #include <bitset>
 #include <chrono>
 #include <deque>
+#include <filesystem>
 #include <map>
 #include <set>
 #include <string>
 #include <utility>
 #include <vector>
+#include <QMainWindow>
+#include <QMessageBox>
+#include <QPushButton>
+#include <QTimer>
 #include <QTranslator>
 #include <qaction.h>
 
@@ -577,11 +577,16 @@ private:
     /// connection instance -> player slot; entries survive a disconnect so the pad
     /// reclaims its own player when it returns
     std::map<u32, int> pad_slots;
+    /// The mode last logged (a change is logged), and each player's refused controller type
+    /// as last logged
+    std::optional<Settings::AppletMode> logged_mode;
+    std::array<std::string, 8> refused_logged{};
+    /// When the deck's controller was last asked to turn its motion sensors back on
+    qint64 deck_motion_asked_at = 0;
     /// Pads whose player was removed: they sit out until they reconnect (connection instance)
     std::set<u32> benched_pads;
-    /// When each player was last removed, and whether its controller was turned off
-    std::array<qint64, 10> removed_at{};
-    std::array<bool, 10> removed_off{};
+    /// When each player's controller was last turned off (Turn Off)
+    std::array<qint64, 10> turned_off_at{};
     /// Each live pad's Bluetooth address ("" when it is not on Bluetooth or unknown), and the
     /// pads that may be on Bluetooth but can't be told apart from others of their model yet
     /// (By the controller: its Steam handle under Steam, see BluetoothKey)
@@ -632,8 +637,6 @@ private:
     std::array<qint64, 10> overlay_green_at{};
     /// Per player: the real device its motion comes from under Steam (0: none)
     std::array<u32, 10> overlay_motion_source{};
-    /// When the deck's controller was last asked to keep its motion sensors on
-    qint64 deck_motion_sent_at = 0;
     /// The overlay's rows as the last assignment tick left them: flash 1 green, 2 red
     struct OverlayRow {
         int player;
@@ -697,8 +700,8 @@ private:
         int player;
         bool joined;
         qint64 at;
-        /// Left because it was removed (1), or removed and turned off (2)
-        int removed = 0;
+        /// Left because Turn Off turned its controller off
+        bool turned_off = false;
     };
     std::vector<ControllerHint> controller_hints;
     /// The flashes already turned into hints, per player (green, red)

@@ -144,16 +144,16 @@ QWidget* Widget::CreateCombobox(std::function<std::string()>& serializer,
         const bool controller = setting.Id() == Settings::values.controller_applet_mode.Id();
         for (const auto& [id, name] : *enumeration) {
             // The automatic modes are the controller applet's alone
-            const bool automatic = id == static_cast<u32>(Settings::AppletMode::ConsoleMode) ||
-                                   id == static_cast<u32>(Settings::AppletMode::HandheldConsoleMode);
+            const bool automatic =
+                id == static_cast<u32>(Settings::AppletMode::ConsoleMode) ||
+                id == static_cast<u32>(Settings::AppletMode::HandheldConsoleMode);
             if (applet && automatic && !controller) {
                 continue;
             }
             combobox->addItem(name, id);
             // Handheld Console needs to know the handheld's own controller
-            const bool handheld_set =
-                !Settings::values.builtin_pad_identity.GetValue().empty() ||
-                !Settings::values.builtin_pad_steam_handle.GetValue().empty();
+            const bool handheld_set = !Settings::values.builtin_pad_identity.GetValue().empty() ||
+                                      !Settings::values.builtin_pad_steam_handle.GetValue().empty();
             if (applet && controller &&
                 id == static_cast<u32>(Settings::AppletMode::HandheldConsoleMode) &&
                 !handheld_set) {

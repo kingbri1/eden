@@ -211,8 +211,7 @@ struct Values {
     Setting<std::string> modern_seat_profiles{linkage, std::string{}, "modern_seat_profiles",
                                               Category::LibraryApplet};
     /// Name a controller on screen for a moment when it takes a player or leaves one
-    SwitchableSetting<bool> console_hints{linkage, true, "console_hints",
-                                          Category::LibraryApplet};
+    SwitchableSetting<bool> console_hints{linkage, true, "console_hints", Category::LibraryApplet};
     /// The overlay's button history: shown, how many inputs it keeps, how long each lasts (in
     /// seconds), and the time between inputs
     SwitchableSetting<bool> console_history{linkage, true, "console_history",
@@ -222,6 +221,10 @@ struct Values {
     SwitchableSetting<int, true> console_history_seconds{
         linkage, 5, 1, 30, "console_history_seconds", Category::LibraryApplet};
     SwitchableSetting<bool> console_history_gaps{linkage, false, "console_history_gaps",
+                                                 Category::LibraryApplet};
+    /// Modern Console under Steam: Eden reads the controllers itself instead of Steam Input's
+    /// virtual ones. Read at startup.
+    SwitchableSetting<bool> console_bypass_steam{linkage, false, "console_bypass_steam",
                                                  Category::LibraryApplet};
     /// Detailed controller traces in the log (every assignment tick), for bug reports. The
     /// devices are described either way (what adding a handheld to the allowlist needs).
@@ -241,8 +244,8 @@ struct Values {
     /// the GUID of every other one, but this handle stays the same across sessions
     /// A controller the user removed as the handheld's own (its Steam handle under Steam, else
     /// its identity): auto-detect leaves it alone until it is allowed again, picked or identified
-    SwitchableSetting<std::string> builtin_pad_blocked{linkage, std::string{}, "builtin_pad_blocked",
-                                                       Category::Core};
+    SwitchableSetting<std::string> builtin_pad_blocked{linkage, std::string{},
+                                                       "builtin_pad_blocked", Category::Core};
     SwitchableSetting<std::string> builtin_pad_steam_handle{
         linkage, std::string{}, "builtin_pad_steam_handle", Category::Core};
     SwitchableSetting<MemoryLayout, true> memory_layout_mode{linkage,

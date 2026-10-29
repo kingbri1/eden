@@ -32,9 +32,9 @@
 #include "ui_configure_input_player.h"
 #include "yuzu/bootmanager.h"
 #include "yuzu/configuration/configure_input_player.h"
-#include "yuzu/configuration/configure_player_assignment.h"
 #include "yuzu/configuration/configure_input_player_widget.h"
 #include "yuzu/configuration/configure_mouse_panning.h"
+#include "yuzu/configuration/configure_player_assignment.h"
 #include "yuzu/configuration/input_profiles.h"
 #include "yuzu/util/limitable_input_dialog.h"
 
@@ -1013,8 +1013,8 @@ void ConfigureInputPlayer::SetConnectionLocked(bool locked) {
             }
             if (shoulders_raised) {
                 shoulders_raised = false;
-                for (QPushButton* button : {ui->buttonL, ui->buttonR, ui->buttonMinus,
-                                            ui->buttonPlus}) {
+                for (QPushButton* button :
+                     {ui->buttonL, ui->buttonR, ui->buttonMinus, ui->buttonPlus}) {
                     if (auto* box = qobject_cast<QBoxLayout*>(
                             button->parentWidget() ? button->parentWidget()->layout() : nullptr)) {
                         delete box->takeAt(box->count() - 1);
@@ -1028,8 +1028,7 @@ void ConfigureInputPlayer::SetConnectionLocked(bool locked) {
             for (QGroupBox* box : bolded_boxes) {
                 if (box) {
                     box->setFont(QFont());
-                    for (QWidget* child :
-                         box->findChildren<QWidget*>(Qt::FindDirectChildrenOnly)) {
+                    for (QWidget* child : box->findChildren<QWidget*>(Qt::FindDirectChildrenOnly)) {
                         child->setFont(QFont());
                     }
                 }
@@ -1051,10 +1050,9 @@ void ConfigureInputPlayer::SetConnectionLocked(bool locked) {
                 for (QWidget* up = box->parentWidget(); up && up != this; up = up->parentWidget()) {
                     inside_box = inside_box || qobject_cast<QGroupBox*>(up) != nullptr;
                 }
-                const bool section = !inside_box &&
-                                     !box->objectName().startsWith(QStringLiteral("buttonMisc")) &&
-                                     !box->objectName().startsWith(
-                                         QStringLiteral("buttonShoulderButtons"));
+                const bool section =
+                    !inside_box && !box->objectName().startsWith(QStringLiteral("buttonMisc")) &&
+                    !box->objectName().startsWith(QStringLiteral("buttonShoulderButtons"));
                 if (!section) {
                     continue;
                 }
@@ -1081,13 +1079,12 @@ void ConfigureInputPlayer::SetConnectionLocked(bool locked) {
             if (!shoulders_raised) {
                 shoulders_raised = true;
                 const int slider = ui->sliderZLThreshold->sizeHint().height();
-                for (QPushButton* button : {ui->buttonL, ui->buttonR, ui->buttonMinus,
-                                            ui->buttonPlus}) {
+                for (QPushButton* button :
+                     {ui->buttonL, ui->buttonR, ui->buttonMinus, ui->buttonPlus}) {
                     if (auto* box = qobject_cast<QBoxLayout*>(
                             button->parentWidget() ? button->parentWidget()->layout() : nullptr)) {
-                        box->addSpacerItem(new QSpacerItem(0, slider + box->spacing(),
-                                                           QSizePolicy::Minimum,
-                                                           QSizePolicy::Fixed));
+                        box->addSpacerItem(new QSpacerItem(
+                            0, slider + box->spacing(), QSizePolicy::Minimum, QSizePolicy::Fixed));
                     }
                 }
             }
@@ -1305,8 +1302,8 @@ void ConfigureInputPlayer::UpdateProfileCard() {
         card_profiles->blockSignals(blocked);
     }
     // The engine changes the player's profile too (a swap, the Controllers tab): follow it
-    const QString carried = QString::fromStdString(
-        Settings::values.players.GetValue()[player_index].profile_name);
+    const QString carried =
+        QString::fromStdString(Settings::values.players.GetValue()[player_index].profile_name);
     if (carried != card_engine_profile) {
         card_engine_profile = carried;
         const bool blocked = ui->comboProfiles->blockSignals(true);
@@ -1400,9 +1397,9 @@ void ConfigureInputPlayer::RenameProfile() {
     }
     if (!InputProfiles::IsProfileNameValid(new_name.toStdString()) ||
         !profiles->RenameProfile(old_name.toStdString(), new_name.toStdString())) {
-        QMessageBox::critical(this, tr("Rename Input Profile"),
-                              tr("Could not rename \u201c%1\u201d to \u201c%2\u201d.")
-                                  .arg(old_name, new_name));
+        QMessageBox::critical(
+            this, tr("Rename Input Profile"),
+            tr("Could not rename \u201c%1\u201d to \u201c%2\u201d.").arg(old_name, new_name));
         return;
     }
     SelectProfile(new_name);

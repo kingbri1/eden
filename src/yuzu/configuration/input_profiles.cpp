@@ -17,8 +17,7 @@ namespace FS = Common::FS;
 namespace {
 
 std::filesystem::path ProfilePath(std::string_view profile_name) {
-    return FS::GetEdenPath(FS::EdenPath::ConfigDir) / "input" /
-           fmt::format("{}.ini", profile_name);
+    return FS::GetEdenPath(FS::EdenPath::ConfigDir) / "input" / fmt::format("{}.ini", profile_name);
 }
 
 bool ProfileExistsInFilesystem(std::string_view profile_name) {
@@ -148,8 +147,7 @@ bool InputProfiles::RenameProfile(const std::string& profile_name, const std::st
     return true;
 }
 
-bool InputProfiles::DuplicateProfile(const std::string& profile_name,
-                                     const std::string& new_name) {
+bool InputProfiles::DuplicateProfile(const std::string& profile_name, const std::string& new_name) {
     if (!ProfileExistsInMap(profile_name) || ProfileExistsInMap(new_name) ||
         ProfileExistsInFilesystem(new_name)) {
         return false;

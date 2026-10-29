@@ -10,9 +10,9 @@
 #include <chrono>
 #include <mutex>
 #include <optional>
-#include <unordered_map>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include "common/container/unordered_map.h"
 
 #include <SDL3/SDL.h>

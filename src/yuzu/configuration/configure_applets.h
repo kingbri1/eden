@@ -46,7 +46,6 @@ private:
 
     void Setup(const ConfigurationShared::Builder& builder);
 
-
     std::vector<std::function<void(bool)>> apply_funcs{};
 
     std::unique_ptr<Ui::ConfigureApplets> ui;

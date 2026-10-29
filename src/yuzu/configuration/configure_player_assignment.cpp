@@ -9,29 +9,29 @@
 #include <tuple>
 
 #include <QAbstractButton>
+#include <QAbstractItemView>
 #include <QApplication>
+#include <QButtonGroup>
+#include <QCheckBox>
 #include <QComboBox>
 #include <QDateTime>
+#include <QDir>
 #include <QDrag>
 #include <QDragEnterEvent>
 #include <QDropEvent>
 #include <QFrame>
-#include <QMimeData>
-#include <QMouseEvent>
-#include <QPen>
-#include <QPainter>
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QIcon>
-#include <QPixmap>
-#include <QResizeEvent>
 #include <QLabel>
+#include <QMimeData>
+#include <QMouseEvent>
+#include <QPainter>
+#include <QPen>
+#include <QPixmap>
 #include <QPushButton>
-#include <QButtonGroup>
-#include <QCheckBox>
-#include <QDir>
 #include <QRadioButton>
-#include <QAbstractItemView>
+#include <QResizeEvent>
 #include <QScrollArea>
 #include <QSlider>
 #include <QStyledItemDelegate>
@@ -47,11 +47,6 @@
 #include "yuzu/configuration/input_profiles.h"
 
 namespace {
-
-bool LaunchedThroughSteam() {
-    return std::getenv("SteamGameId") != nullptr || std::getenv("SteamAppId") != nullptr;
-}
-
 bool IsAutomatic(Settings::AppletMode mode) {
     return mode == Settings::AppletMode::ConsoleMode ||
            mode == Settings::AppletMode::HandheldConsoleMode;
@@ -61,7 +56,7 @@ constexpr int MaxPlayers = 8;
 
 /// The players' colours, as the overlay draws their badges
 constexpr std::array<QColor, 8> PlayerColors{
-    QColor(79, 142, 247), QColor(239, 91, 91), QColor(47, 191, 113), QColor(245, 184, 46),
+    QColor(79, 142, 247),  QColor(239, 91, 91),  QColor(47, 191, 113), QColor(245, 184, 46),
     QColor(155, 108, 242), QColor(242, 140, 56), QColor(46, 196, 201), QColor(227, 107, 174),
 };
 
@@ -107,7 +102,8 @@ public:
 
 protected:
     bool eventFilter(QObject* watched, QEvent* event) override {
-        if (watched == combo && (event->type() == QEvent::Resize || event->type() == QEvent::Show)) {
+        if (watched == combo &&
+            (event->type() == QEvent::Resize || event->type() == QEvent::Show)) {
             button->move(combo->width() - 22 - button->width(),
                          (combo->height() - button->height()) / 2);
         }
@@ -249,11 +245,11 @@ QToolButton* ConfigurePlayerAssignment::AddClearButton(QComboBox* combo) {
     button->setText(QStringLiteral("\u2715"));
     button->setCursor(Qt::ArrowCursor);
     button->setFixedSize(18, 18);
-    button->setStyleSheet(Themed(QStringLiteral(
-        "QToolButton { border: none; border-radius: 9px; background: transparent; "
-        "color: muted-text; padding: 0px; }"
-        "QToolButton:hover { background: palette(highlight); "
-        "color: palette(highlighted-text); }")));
+    button->setStyleSheet(Themed(
+        QStringLiteral("QToolButton { border: none; border-radius: 9px; background: transparent; "
+                       "color: muted-text; padding: 0px; }"
+                       "QToolButton:hover { background: palette(highlight); "
+                       "color: palette(highlighted-text); }")));
     // (Room for it between the text and the arrow)
     combo->setStyleSheet(QStringLiteral("QComboBox { padding-right: 40px; }"));
     combo->installEventFilter(new ClearButtonPlacer(combo, button));
@@ -267,10 +263,11 @@ QString ConfigurePlayerAssignment::Themed(QString style) {
     }
     // An open drop-down list is a window of its own, with nothing behind it: it takes the
     // theme's background, solid (a tint there would show as white)
-    style.replace(QStringLiteral("popup-base"),
-                  QString::fromStdString(UISettings::values.theme).contains(QStringLiteral("midnight"))
-                      ? QStringLiteral("#19232D")
-                      : QStringLiteral("#31363B"));
+    style.replace(
+        QStringLiteral("popup-base"),
+        QString::fromStdString(UISettings::values.theme).contains(QStringLiteral("midnight"))
+            ? QStringLiteral("#19232D")
+            : QStringLiteral("#31363B"));
     // Cards show the theme's own background (its widgets all paint it), fields and buttons a
     // light tint, and the accent is the dark theme's blue
     static const std::array<std::pair<const char*, const char*>, 8> dark{{
@@ -341,8 +338,8 @@ QString ConfigurePlayerAssignment::OutlinedButtonStyle() {
 }
 
 QWidget* ConfigurePlayerAssignment::MakeSegmented(QWidget* parent, const QStringList& labels,
-                                                 const std::vector<int>& ids,
-                                                 QButtonGroup* group) {
+                                                  const std::vector<int>& ids,
+                                                  QButtonGroup* group) {
     auto* bar = new QWidget(parent);
     auto* bar_layout = new QHBoxLayout(bar);
     bar_layout->setContentsMargins(0, 0, 0, 0);
@@ -351,12 +348,12 @@ QWidget* ConfigurePlayerAssignment::MakeSegmented(QWidget* parent, const QString
         auto* button = new QPushButton(labels[k], bar);
         button->setCheckable(true);
         button->setCursor(Qt::PointingHandCursor);
-        QString style = QStringLiteral(
-            "QPushButton { padding: 5px 14px; border: 1px solid palette(mid); "
-            "background: palette(button); }"
-            "QPushButton:checked { background: palette(highlight); "
-            "color: palette(highlighted-text); border-color: palette(highlight); }"
-            "QPushButton:disabled { color: palette(mid); }");
+        QString style =
+            QStringLiteral("QPushButton { padding: 5px 14px; border: 1px solid palette(mid); "
+                           "background: palette(button); }"
+                           "QPushButton:checked { background: palette(highlight); "
+                           "color: palette(highlighted-text); border-color: palette(highlight); }"
+                           "QPushButton:disabled { color: palette(mid); }");
         if (k == 0) {
             style += QStringLiteral("QPushButton { border-top-left-radius: 6px; "
                                     "border-bottom-left-radius: 6px; }");
@@ -393,16 +390,16 @@ ConfigurePlayerAssignment::ConfigurePlayerAssignment(QWidget* parent) : QWidget(
     layout->setSpacing(8);
     // Each section is a rounded card with its title on the edge; drop-downs are rounded fields
     // (kept tight: the Deck's screen is 800 pixels tall)
-    setStyleSheet(Themed(QStringLiteral(
-                      "QGroupBox { border: 1px solid palette(mid); border-radius: 10px; "
-                      "margin-top: 10px; padding: 8px 8px 4px 8px; "
-                      "background: palette(alternate-base); }"
-                      "QGroupBox::title { subcontrol-origin: margin; left: 14px; "
-                      "padding: 0 4px; font-weight: bold; }"
-                      // Labels show the card behind them (a dark theme paints every widget)
-                      "QLabel { background: transparent; }"
-                      "QLabel#note { color: muted-text; }")) +
-                  ModernComboStyle());
+    setStyleSheet(
+        Themed(QStringLiteral("QGroupBox { border: 1px solid palette(mid); border-radius: 10px; "
+                              "margin-top: 10px; padding: 8px 8px 4px 8px; "
+                              "background: palette(alternate-base); }"
+                              "QGroupBox::title { subcontrol-origin: margin; left: 14px; "
+                              "padding: 0 4px; font-weight: bold; }"
+                              // Labels show the card behind them (a dark theme paints every widget)
+                              "QLabel { background: transparent; }"
+                              "QLabel#note { color: muted-text; }")) +
+        ModernComboStyle());
 
     // The controller applet's mode, as a segmented control: Manual (players set by hand),
     // Modern Console (automatic) and Real Hardware (the console's own applet)
@@ -438,8 +435,8 @@ ConfigurePlayerAssignment::ConfigurePlayerAssignment(QWidget* parent) : QWidget(
     auto* manual_row = new QHBoxLayout();
     manual_row->addWidget(MakeSegmented(
         manual_panel, {tr("Disabled"), tr("Custom Frontend"), tr("Real Hardware")},
-        {static_cast<int>(Settings::AppletMode::Disabled), static_cast<int>(Settings::AppletMode::HLE),
-         static_cast<int>(Settings::AppletMode::LLE)},
+        {static_cast<int>(Settings::AppletMode::Disabled),
+         static_cast<int>(Settings::AppletMode::HLE), static_cast<int>(Settings::AppletMode::LLE)},
         manual_group));
     manual_row->addStretch(1);
     // What Manual itself does, under the choices
@@ -459,7 +456,7 @@ ConfigurePlayerAssignment::ConfigurePlayerAssignment(QWidget* parent) : QWidget(
     manual_indent->addWidget(manual_panel);
     mode_layout->addLayout(manual_indent);
 
-    // Under Modern Console: whether this is a handheld with its own controls (Docked Handheld)
+    // Under Modern Console: whether this is a handheld with its own controls
     handheld_panel = new QFrame(mode_box);
     handheld_panel->setObjectName(QStringLiteral("handheldPanel"));
     handheld_panel->setStyleSheet(
@@ -490,6 +487,45 @@ ConfigurePlayerAssignment::ConfigurePlayerAssignment(QWidget* parent) : QWidget(
     indent->setContentsMargins(16, 0, 0, 0);
     indent->addWidget(handheld_panel);
     mode_layout->addLayout(indent);
+
+    // Under Steam: read the controllers directly instead of through Steam Input
+    steam_panel = new QFrame(mode_box);
+    steam_panel->setObjectName(QStringLiteral("steamPanel"));
+    steam_panel->setStyleSheet(
+        Themed(QStringLiteral("#steamPanel { border: 1px solid palette(mid); "
+                              "border-radius: 8px; background: palette(base); }")));
+    auto* steam_layout = new QHBoxLayout(steam_panel);
+    steam_layout->setContentsMargins(12, 8, 12, 8);
+    auto* steam_text = new QVBoxLayout();
+    auto* steam_title = new QLabel(tr("Bypass Steam Input"), steam_panel);
+    steam_title->setFont(title_font);
+    auto* steam_note = new QLabel(
+        tr("Eden reads your controllers directly instead of through Steam's virtual "
+           "controllers, so Steam Input layouts don't apply in Eden. Try this if a controller "
+           "doesn't work under Steam, such as the Steam Controller or a newer controller. Takes "
+           "effect after restarting Eden; connected controllers may be assigned to different "
+           "players."),
+        steam_panel);
+    steam_note->setWordWrap(true);
+    steam_note->setObjectName(QStringLiteral("note"));
+    steam_restart = new QLabel(tr("Restart Eden to apply this change."), steam_panel);
+    steam_text->addWidget(steam_title);
+    steam_text->addWidget(steam_note);
+    steam_text->addWidget(steam_restart);
+    steam_layout->addLayout(steam_text, 1);
+    steam_switch = new ToggleSwitch(steam_panel);
+    steam_switch->setToolTip(tr("On: Eden reads the controllers directly"));
+    steam_layout->addWidget(steam_switch, 0, Qt::AlignVCenter);
+    original_bypass = Settings::values.console_bypass_steam.GetValue();
+    steam_switch->setChecked(original_bypass);
+    connect(steam_switch, &QAbstractButton::toggled, this, [this](bool on) {
+        Settings::values.console_bypass_steam.SetValue(on);
+        UpdateModeUi();
+    });
+    auto* steam_indent = new QHBoxLayout();
+    steam_indent->setContentsMargins(16, 0, 0, 0);
+    steam_indent->addWidget(steam_panel);
+    mode_layout->addLayout(steam_indent);
     mode_info = new QLabel(mode_box);
     mode_info->setWordWrap(true);
     mode_layout->addWidget(mode_info);
@@ -596,9 +632,8 @@ ConfigurePlayerAssignment::ConfigurePlayerAssignment(QWidget* parent) : QWidget(
                                    tr("The last buttons each player pressed, beside their row. "
                                       "Buttons pressed together show as one input."));
     // A slider with its value beside it
-    const auto add_slider = [this, display, history_layout](const QString& title, int min,
-                                                            int max, int value,
-                                                            const QString& unit) {
+    const auto add_slider = [this, display, history_layout](const QString& title, int min, int max,
+                                                            int value, const QString& unit) {
         auto* line = new QHBoxLayout();
         auto* label = new QLabel(title, display);
         line->addWidget(label);
@@ -673,7 +708,7 @@ ConfigurePlayerAssignment::ConfigurePlayerAssignment(QWidget* parent) : QWidget(
                                   tr("Writes detailed controller traces to the log several times "
                                      "a second, for bug reports. Connected controllers are "
                                      "always described in the log."));
-    original_probes = Settings::values.console_debug_probes.GetValue();
+    original_probes = Common::ControllerProbes();
     probes_toggle->setChecked(original_probes);
     connect(probes_toggle, &QAbstractButton::toggled, this,
             [](bool on) { Settings::values.console_debug_probes.SetValue(on); });
@@ -739,6 +774,7 @@ ConfigurePlayerAssignment::~ConfigurePlayerAssignment() {
         Settings::values.console_history_seconds.SetValue(original_history_seconds);
         Settings::values.console_history_gaps.SetValue(original_history_gaps);
         Settings::values.console_debug_probes.SetValue(original_probes);
+        Settings::values.console_bypass_steam.SetValue(original_bypass);
     }
 }
 
@@ -748,8 +784,7 @@ void ConfigurePlayerAssignment::LoadConfiguration() {
     handler_group->button(modern ? HandlerModern : HandlerManual)->setChecked(true);
     // Under Manual the applet as set; the default there is Custom Frontend
     QAbstractButton* applet = manual_group->button(static_cast<int>(current));
-    (applet && !modern ? applet
-                       : manual_group->button(static_cast<int>(Settings::AppletMode::HLE)))
+    (applet && !modern ? applet : manual_group->button(static_cast<int>(Settings::AppletMode::HLE)))
         ->setChecked(true);
     handheld_switch->setChecked(current == Settings::AppletMode::HandheldConsoleMode);
     UpdateModeUi();
@@ -781,6 +816,11 @@ void ConfigurePlayerAssignment::ApplyConfiguration() {
 void ConfigurePlayerAssignment::UpdateModeUi() {
     const auto selected = static_cast<Settings::AppletMode>(SelectedMode());
     handheld_panel->setVisible(handler_group->checkedId() == HandlerModern);
+    // (Bypass Steam Input: only under Steam; applies to a Modern Console start)
+    steam_panel->setVisible(handler_group->checkedId() == HandlerModern &&
+                            Common::RunningUnderSteam());
+    steam_restart->setVisible(steam_switch->isChecked() !=
+                              Common::GetControllerConsoleState().steam_bypassed);
     manual_panel->setVisible(handler_group->checkedId() == HandlerManual);
     // Only the automatic modes have live players to show
     const bool automatic = IsAutomatic(selected);
@@ -847,8 +887,7 @@ void ConfigurePlayerAssignment::RefreshBuiltin() {
         builtin_picker->clear();
         builtin_picker->addItem(tr("Auto-detect"), QString{});
         for (const auto& [display, ident] : pads) {
-            builtin_picker->addItem(QString::fromStdString(display),
-                                    QString::fromStdString(ident));
+            builtin_picker->addItem(QString::fromStdString(display), QString::fromStdString(ident));
         }
         const int keep = builtin_picker->findData(current);
         builtin_picker->setCurrentIndex(keep > 0 ? keep : 0);
@@ -856,11 +895,12 @@ void ConfigurePlayerAssignment::RefreshBuiltin() {
     }
 
     if (armed) {
-        const auto left = std::chrono::duration_cast<std::chrono::seconds>(
-                              std::chrono::seconds{15} - (std::chrono::steady_clock::now() - armed_at))
-                              .count();
-        builtin_status->setText(tr("Waiting for a button press (%1 seconds)...")
-                                    .arg(std::max<qint64>(0, left)));
+        const auto left =
+            std::chrono::duration_cast<std::chrono::seconds>(
+                std::chrono::seconds{15} - (std::chrono::steady_clock::now() - armed_at))
+                .count();
+        builtin_status->setText(
+            tr("Waiting for a button press (%1 seconds)...").arg(std::max<qint64>(0, left)));
         // (The line below counts down)
         builtin_identify->setText(tr("Press a button..."));
         return;
@@ -869,14 +909,13 @@ void ConfigurePlayerAssignment::RefreshBuiltin() {
 
     // What is stored for the way Eden was launched: the Steam handle under Steam, the raw
     // pad's identity otherwise (each launch kind keeps its own)
-    const bool steam = LaunchedThroughSteam();
+    const bool steam = Common::SteamPadsInUse();
     const QString identity =
         QString::fromStdString(Settings::values.builtin_pad_identity.GetValue());
     const QString handle =
         QString::fromStdString(Settings::values.builtin_pad_steam_handle.GetValue());
-    const QString stored = steam ? (handle.isEmpty() ? QString{}
-                                                     : QStringLiteral("steamhandle:") + handle)
-                                 : identity;
+    const QString stored =
+        steam ? (handle.isEmpty() ? QString{} : QStringLiteral("steamhandle:") + handle) : identity;
     const bool declared = !steam && Settings::values.builtin_pad_manual.GetValue();
 
     // Keep the picker on a declared pad, else on automatic detection
@@ -902,7 +941,7 @@ void ConfigurePlayerAssignment::RefreshBuiltin() {
         builtin_status->setText(
             tr("Not set. Pick the handheld's controller above, or use Identify."));
     } else {
-        const QString name = stored_index > 0 ? builtin_picker->itemText(stored_index)
+        const QString name = stored_index > 0         ? builtin_picker->itemText(stored_index)
                              : !detected_name.empty() ? QString::fromStdString(detected_name)
                                                       : tr("not set");
         builtin_status->setText(
@@ -972,8 +1011,8 @@ void ConfigurePlayerAssignment::RefreshPlayers() {
     {
         const QDir dir{QString::fromStdString(Common::FS::PathToUTF8String(
             Common::FS::GetEdenPath(Common::FS::EdenPath::ConfigDir) / "input"))};
-        for (const QString& file : dir.entryList({QStringLiteral("*.ini")}, QDir::Files,
-                                                 QDir::Name)) {
+        for (const QString& file :
+             dir.entryList({QStringLiteral("*.ini")}, QDir::Files, QDir::Name)) {
             const QString name = file.chopped(4);
             if (InputProfiles::IsProfileNameValid(name.toStdString())) {
                 profiles.push_back(name);
@@ -1023,10 +1062,10 @@ void ConfigurePlayerAssignment::RefreshPlayers() {
             auto* badge = new QLabel(QStringLiteral("P%1").arg(player + 1), row);
             badge->setAlignment(Qt::AlignCenter);
             badge->setFixedSize(34, 20);
-            badge->setStyleSheet(QStringLiteral("QLabel { background: %1; color: white; "
-                                                "border-radius: 10px; font-weight: bold; }")
-                                     .arg(PlayerColors[static_cast<std::size_t>(player) % 8]
-                                              .name()));
+            badge->setStyleSheet(
+                QStringLiteral("QLabel { background: %1; color: white; "
+                               "border-radius: 10px; font-weight: bold; }")
+                    .arg(PlayerColors[static_cast<std::size_t>(player) % 8].name()));
             line->addWidget(badge);
             line->addWidget(new QLabel(QString::fromStdString(entry.name), row), 1);
             const bool live = !entry.leaving;
@@ -1063,8 +1102,7 @@ void ConfigurePlayerAssignment::RefreshPlayers() {
                     });
             clear->setToolTip(tr("Take the profile off P%1").arg(player + 1));
             // (A profile renamed or deleted elsewhere shows as none: no ✕ for it)
-            clear->setVisible(
-                live && profiles.contains(QString::fromStdString(entry.profile)));
+            clear->setVisible(live && profiles.contains(QString::fromStdString(entry.profile)));
             connect(clear, &QToolButton::clicked, this, take_off);
             line->addWidget(profile);
 
@@ -1089,7 +1127,6 @@ void ConfigurePlayerAssignment::RefreshPlayers() {
             connect(down, &QToolButton::clicked, this,
                     [this, player] { RequestSwap(player, player + 1); });
             line->addWidget(down);
-
 
             // Swap and Config stand out: outlined in the highlight colour, filled on hover (and
             // Swap filled while it waits for the second player)
@@ -1189,10 +1226,11 @@ void ConfigurePlayerAssignment::RefreshPlayers() {
                                                "palette(mid); border-radius: 8px; "
                                                "background: palette(base); }"));
     const auto fill = [](const char* rgba) {
-        return Themed(QStringLiteral("QFrame#playerRow { border: 1px solid palette(mid); border-radius: "
-                              "8px; background-color: rgba(%1); } "
-                              "QFrame#playerRow QLabel { color: white; }")
-            .arg(QString::fromLatin1(rgba)));
+        return Themed(
+            QStringLiteral("QFrame#playerRow { border: 1px solid palette(mid); border-radius: "
+                           "8px; background-color: rgba(%1); } "
+                           "QFrame#playerRow QLabel { color: white; }")
+                .arg(QString::fromLatin1(rgba)));
     };
     const auto blink_on = [now](qint64 since) {
         const qint64 elapsed = now - since;
@@ -1206,8 +1244,8 @@ void ConfigurePlayerAssignment::RefreshPlayers() {
             continue;
         }
         const auto rumbled = rumbled_at.find(player);
-        const bool active = entry->active ||
-                            (rumbled != rumbled_at.end() && now - rumbled->second < 500);
+        const bool active =
+            entry->active || (rumbled != rumbled_at.end() && now - rumbled->second < 500);
         const bool blink = entry->flash != 0 && blink_on(entry->flash_since);
         QString style = card;
         if (entry->flash == 2) {

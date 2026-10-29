@@ -15,6 +15,7 @@
 #include <set>
 #include <sstream>
 #include <string>
+#include "common/controller_console_state.h"
 #include "common/logging.h"
 #include "common/math_util.h"
 #include "common/param_package.h"
@@ -569,7 +570,7 @@ void SDLDriver::InitJoystick(SDL_JoystickID joystick_id) {
 
     if (joystick_it != joystick_guid_list.end()) {
         const int port = static_cast<int>(joystick_it - joystick_guid_list.begin());
-        if (Settings::values.console_debug_probes.GetValue()) {
+        if (Common::ControllerProbes()) {
             LOG_INFO(Input, "input: attach guid={} port={} name={} (reusing a freed slot)",
                      guid.RawString(), port, SDL_GetJoystickName(sdl_joystick));
         }
@@ -601,7 +602,7 @@ void SDLDriver::CloseJoystick(SDL_Joystick* sdl_joystick) {
                                           });
 
     if (joystick_it != joystick_guid_list.end()) {
-        if (Settings::values.console_debug_probes.GetValue()) {
+        if (Common::ControllerProbes()) {
             LOG_INFO(Input, "input: detach guid={} port={}", guid.RawString(),
                      static_cast<int>(joystick_it - joystick_guid_list.begin()));
         }
@@ -721,7 +722,7 @@ std::set<u32>& UnhiddenControllers() {
 void LogMotionHardware() {
 #ifdef __linux__
     // (Debug Probes)
-    if (!Settings::values.console_debug_probes.GetValue()) {
+    if (!Common::ControllerProbes()) {
         return;
     }
     namespace fs = std::filesystem;
@@ -749,8 +750,8 @@ void LogMotionHardware() {
         }
         const fs::path device = fs::canonical(dir / "device", ignored);
         sensors += fmt::format("\n  {} name={} gyro={} accel={} mount=[{}] at={}",
-                               dir.filename().string(), read_line(dir / "name"), gyro, accel,
-                               mount, ignored ? std::string{"?"} : device.string());
+                               dir.filename().string(), read_line(dir / "name"), gyro, accel, mount,
+                               ignored ? std::string{"?"} : device.string());
     }
     LOG_INFO(Input, "Motion sensors of the system (IIO):{}",
              sensors.empty() ? std::string{" none"} : sensors);
@@ -783,13 +784,13 @@ void LogMotionHardware() {
 
 /// A controller Eden opened again under Steam Input for its motion alone
 bool IsUnhiddenController(SDL_Joystick* joystick) {
-    const u32 id = static_cast<u32>(SDL_GetJoystickVendor(joystick)) << 16 |
-                   SDL_GetJoystickProduct(joystick);
+    const u32 id =
+        static_cast<u32>(SDL_GetJoystickVendor(joystick)) << 16 | SDL_GetJoystickProduct(joystick);
     return UnhiddenControllers().contains(id);
 }
 
 void UnhideMotionControllers() {
-    if (!std::getenv("SteamGameId") && !std::getenv("SteamAppId")) {
+    if (!Common::RunningUnderSteam()) {
         return;
     }
     const char* env = std::getenv("SDL_GAMECONTROLLER_IGNORE_DEVICES");
@@ -821,7 +822,7 @@ void UnhideMotionControllers() {
     if (!kept.empty()) {
         kept.pop_back();
     }
-    if (Settings::values.console_debug_probes.GetValue()) {
+    if (Common::ControllerProbes()) {
         LOG_INFO(Input, "Steam Input: opening motion controllers for their sensors: {}",
                  dropped.empty() ? std::string{"none hidden"} : dropped);
     }
@@ -849,7 +850,22 @@ SDLDriver::SDLDriver(std::string input_engine_) : InputEngine(std::move(input_en
 
     // SDL3 defaults Steam Controller Bluetooth HIDAPI support to off, which can disable gyro.
     SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI_STEAM, "1");
-    UnhideMotionControllers();
+    // Bypass Steam Input (Modern Console, under Steam): SDL takes every controller Steam hides,
+    // and the engine uses those instead of Steam's virtual pads
+    const auto mode = Settings::values.controller_applet_mode.GetValue();
+    const bool automatic = mode == Settings::AppletMode::ConsoleMode ||
+                           mode == Settings::AppletMode::HandheldConsoleMode;
+    if (Common::RunningUnderSteam() && automatic &&
+        Settings::values.console_bypass_steam.GetValue()) {
+        SDL_SetHintWithPriority(SDL_HINT_GAMECONTROLLER_IGNORE_DEVICES, "", SDL_HINT_OVERRIDE);
+        SDL_SetHintWithPriority(SDL_HINT_JOYSTICK_HIDAPI_STEAMDECK, "1", SDL_HINT_OVERRIDE);
+        Common::GetControllerConsoleState().steam_bypassed = true;
+        if (Common::ControllerProbes()) {
+            LOG_INFO(Input, "Steam Input bypassed: SDL opens every controller");
+        }
+    } else {
+        UnhideMotionControllers();
+    }
     LogMotionHardware();
     SDL_SetHint(SDL_HINT_GAMECONTROLLER_SENSOR_FUSION, "1");
     SDL_SetHint(SDL_HINT_AUTO_UPDATE_SENSORS, "1");

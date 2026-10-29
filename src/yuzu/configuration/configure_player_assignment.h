@@ -80,13 +80,18 @@ private:
 
     /// The handler (Manual, Modern Console). Under Manual, the controller applet a game sees
     /// (Disabled, Custom Frontend, Real Hardware); under Modern Console, whether this is a
-    /// handheld with built-in controls (Docked Handheld).
+    /// handheld with built-in controls (Handheld Console).
     enum Handler { HandlerManual, HandlerModern };
     QButtonGroup* handler_group = nullptr;
     QFrame* manual_panel = nullptr;
     QButtonGroup* manual_group = nullptr;
     QFrame* handheld_panel = nullptr;
     QAbstractButton* handheld_switch = nullptr;
+    /// Bypass Steam Input (under Steam), below the handheld option
+    QFrame* steam_panel = nullptr;
+    QAbstractButton* steam_switch = nullptr;
+    QLabel* steam_restart = nullptr;
+    bool original_bypass = false;
     QLabel* mode_info = nullptr;
     QWidget* display_box = nullptr;
     QWidget* about_box = nullptr;

@@ -7,7 +7,6 @@
 #include <algorithm>
 #include <functional>
 #include <vector>
-#include <QStandardItemModel>
 #include <QBoxLayout>
 #include <QCheckBox>
 #include <QColorDialog>
@@ -18,6 +17,7 @@
 #include <QPixmap>
 #include <QPushButton>
 #include <QSlider>
+#include <QStandardItemModel>
 #include <QStringLiteral>
 #include <QtCore/qobjectdefs.h>
 #include <qabstractbutton.h>
@@ -190,7 +190,8 @@ void ConfigureGraphics::PopulateVSyncModeSelection(bool use_setting) {
             if (mode_name.isEmpty() || !model) {
                 continue;
             }
-            vsync_mode_combobox->insertItem(index, tr("%1 - unavailable in Game Mode").arg(mode_name));
+            vsync_mode_combobox->insertItem(index,
+                                            tr("%1 - unavailable in Game Mode").arg(mode_name));
             vsync_mode_combobox->setItemData(
                 index,
                 tr("Steam's Game Mode does not offer this mode by default. In Steam's Performance "

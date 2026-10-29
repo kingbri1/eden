@@ -9,8 +9,29 @@
 #include <optional>
 #include <thread>
 
+#include <algorithm>
+#include <mutex>
+#include <vector>
+#include <QApplication>
+#include <QButtonGroup>
+#include <QCursor>
+#include <QDateTime>
+#include <QEvent>
+#include <QGroupBox>
+#include <QHBoxLayout>
+#include <QIcon>
+#include <QMouseEvent>
+#include <QPainter>
+#include <QPixmap>
+#include <QProxyStyle>
+#include <QRadioButton>
+#include <QStyleOptionTab>
+#include <QTabBar>
+#include <QTabWidget>
+#include <QTimer>
+#include <QToolButton>
+#include "common/controller_console_state.h"
 #include "common/settings.h"
-#include "qt_common/config/uisettings.h"
 #include "common/settings_enums.h"
 #include "core/core.h"
 #include "core/hle/service/am/am.h"
@@ -18,6 +39,7 @@
 #include "core/hle/service/sm/sm.h"
 #include "hid_core/frontend/emulated_controller.h"
 #include "hid_core/hid_core.h"
+#include "qt_common/config/uisettings.h"
 #include "qt_common/qt_compat.h"
 #include "ui_configure_input.h"
 #include "ui_configure_input_advanced.h"
@@ -26,31 +48,9 @@
 #include "yuzu/configuration/configure_debug_controller.h"
 #include "yuzu/configuration/configure_input.h"
 #include "yuzu/configuration/configure_input_advanced.h"
-#include "yuzu/configuration/configure_player_assignment.h"
-#include "common/controller_console_state.h"
-#include <mutex>
-#include <QTimer>
-#include <vector>
-#include <algorithm>
-#include <QTabWidget>
-#include <QButtonGroup>
-#include <QRadioButton>
-#include <QHBoxLayout>
-#include <QGroupBox>
-#include <QTabBar>
-#include <QCursor>
-#include <QApplication>
-#include <QPainter>
-#include <QStyleOptionTab>
-#include <QProxyStyle>
-#include <QDateTime>
-#include <QEvent>
-#include <QMouseEvent>
-#include <QToolButton>
-#include <QIcon>
-#include <QPixmap>
 #include "yuzu/configuration/configure_input_player.h"
 #include "yuzu/configuration/configure_motion_touch.h"
+#include "yuzu/configuration/configure_player_assignment.h"
 #include "yuzu/configuration/configure_ringcon.h"
 #include "yuzu/configuration/configure_touchscreen_advanced.h"
 #include "yuzu/configuration/configure_vibration.h"
@@ -168,7 +168,7 @@ void ConfigureInput::Initialize(InputCommon::InputSubsystem* input_subsystem,
     connect(player_controllers[0], &ConfigureInputPlayer::HandheldStateChanged,
             [this](bool is_handheld) { UpdateDockedState(is_handheld); });
 
-    // The Players tab comes first: how players are assigned, and who is which player now
+    // The Controllers tab comes first: how players are assigned, and who is which player now
     assignment = new ConfigurePlayerAssignment(this);
     assignment->setAccessibleName(tr("Controllers"));
     assignment->SetOpenPlayerTab([this](int player) {
@@ -246,8 +246,8 @@ void ConfigureInput::Initialize(InputCommon::InputSubsystem* input_subsystem,
             mirror_console_mode();
         }
         // Several players: the tabs drag and carry arrows; one alone has nothing to reorder
-        const bool several = std::count_if(rows.begin(), rows.end(),
-                                           [](const auto& r) { return !r.leaving; }) > 1;
+        const bool several =
+            std::count_if(rows.begin(), rows.end(), [](const auto& r) { return !r.leaving; }) > 1;
         for (std::size_t i = 0; i < player_tabs.size(); ++i) {
             const auto row = std::find_if(rows.begin(), rows.end(), [i](const auto& r) {
                 return r.player == static_cast<int>(i);
@@ -260,8 +260,8 @@ void ConfigureInput::Initialize(InputCommon::InputSubsystem* input_subsystem,
                 // As the menu bar's chips light: red when the controller left, then input held,
                 // then the green blink when a controller takes the player
                 const long long elapsed = shown ? now - row->flash_since : 0;
-                const bool blink = shown && row->flash != 0 && elapsed < flash_ms &&
-                                   (elapsed / 125) % 2 == 0;
+                const bool blink =
+                    shown && row->flash != 0 && elapsed < flash_ms && (elapsed / 125) % 2 == 0;
                 if (blink && row->flash == 2) {
                     tab_lit[i] = 3;
                 } else if (shown && row->active && !row->leaving) {
@@ -335,8 +335,8 @@ void ConfigureInput::Initialize(InputCommon::InputSubsystem* input_subsystem,
             // moves, and with the hover lost it moves back, shaking. A hovered tab keeps its
             // size: their padding (8 at the sides, 2 above and below) less that border (the
             // bottom one grows from 2 to 3). (Every page of the settings dialog shares this bar.)
-            const bool midnight =
-                QString::fromStdString(UISettings::values.theme).contains(QStringLiteral("midnight"));
+            const bool midnight = QString::fromStdString(UISettings::values.theme)
+                                      .contains(QStringLiteral("midnight"));
             const QString steady =
                 midnight ? QStringLiteral("QTabBar::tab:top:!selected:hover { padding-left: 7px; "
                                           "padding-right: 7px; padding-top: 1px; "
@@ -350,11 +350,11 @@ void ConfigureInput::Initialize(InputCommon::InputSubsystem* input_subsystem,
             if (painted) {
                 if (!tab_overlay || tab_overlay->parentWidget() != bar) {
                     delete tab_overlay;
-                    tab_overlay = new PlayerTabOverlay(
-                        bar, QString::fromStdString(UISettings::values.theme)
-                                     .contains(QStringLiteral("midnight"))
-                                 ? QColor(0x19, 0x23, 0x2D)
-                                 : QColor(0x31, 0x36, 0x3B));
+                    tab_overlay =
+                        new PlayerTabOverlay(bar, QString::fromStdString(UISettings::values.theme)
+                                                          .contains(QStringLiteral("midnight"))
+                                                      ? QColor(0x19, 0x23, 0x2D)
+                                                      : QColor(0x31, 0x36, 0x3B));
                 }
                 if (tab_overlay->geometry() != bar->rect()) {
                     tab_overlay->setGeometry(bar->rect());
@@ -384,8 +384,7 @@ void ConfigureInput::Initialize(InputCommon::InputSubsystem* input_subsystem,
             if (tabs != drag_tabs) {
                 drag_tabs = tabs;
                 tabs->tabBar()->installEventFilter(this);
-                connect(tabs, &QTabWidget::currentChanged, this,
-                        &ConfigureInput::UpdateTabArrows);
+                connect(tabs, &QTabWidget::currentChanged, this, &ConfigureInput::UpdateTabArrows);
             }
             if (pending_select >= 0) {
                 const int index = tabs->indexOf(player_tabs[pending_select]);
@@ -411,8 +410,8 @@ void ConfigureInput::Initialize(InputCommon::InputSubsystem* input_subsystem,
                     applet_mode != Settings::AppletMode::HandheldConsoleMode) {
                     return;
                 }
-                const auto it = std::find(player_tabs.begin(), player_tabs.end(),
-                                          tabs->widget(index));
+                const auto it =
+                    std::find(player_tabs.begin(), player_tabs.end(), tabs->widget(index));
                 if (it == player_tabs.end()) {
                     return;
                 }
@@ -829,9 +828,8 @@ bool ConfigureInput::DragPlayerTab(QEvent* event) {
         const int index = bar->tabAt(at);
         // (Player tabs carry their look: colour and lit state)
         own_drag_index =
-            mouse->button() == Qt::LeftButton && index >= 0 && TabLook(bar->tabData(index))
-                ? index
-                : -1;
+            mouse->button() == Qt::LeftButton && index >= 0 && TabLook(bar->tabData(index)) ? index
+                                                                                            : -1;
         own_drag_press_x = at.x();
         own_dragging = false;
         return false; // the tab bar still selects the tab
@@ -968,14 +966,14 @@ void ConfigureInput::UpdateTabArrows() {
 
 QWidget* ConfigureInput::PlayerTab(int player) const {
     return player >= 0 && player < static_cast<int>(player_tabs.size()) ? player_tabs[player]
-                                                                          : nullptr;
+                                                                        : nullptr;
 }
 
 QList<QWidget*> ConfigureInput::GetSubTabs() const {
     // The settings dialog shows these, not this widget's own tab bar
     return {
-        assignment,     ui->tabAdvanced,  ui->tabPlayer1, ui->tabPlayer2, ui->tabPlayer3,
-        ui->tabPlayer4, ui->tabPlayer5, ui->tabPlayer6, ui->tabPlayer7, ui->tabPlayer8,
+        assignment,     ui->tabAdvanced, ui->tabPlayer1, ui->tabPlayer2, ui->tabPlayer3,
+        ui->tabPlayer4, ui->tabPlayer5,  ui->tabPlayer6, ui->tabPlayer7, ui->tabPlayer8,
     };
 }
 
