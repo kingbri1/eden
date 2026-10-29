@@ -3866,8 +3866,9 @@ void MainWindow::ApplyConsoleControllerMode() {
                 // A real device next to Steam's virtual pads, unhidden for its motion: never a
                 // player; logged once, with the virtual pads of the same model
                 motion_devices.push_back(id);
+                // (Only marked once logged: Debug Probes turned on later still describes it)
                 static std::set<u32> probed;
-                if (probed.insert(id).second) {
+                if (Settings::values.console_debug_probes.GetValue() && probed.insert(id).second) {
                     std::string twins;
                     const Uint16 vendor = SDL_GetJoystickVendorForID(id);
                     const Uint16 product = SDL_GetJoystickProductForID(id);
@@ -3898,7 +3899,8 @@ void MainWindow::ApplyConsoleControllerMode() {
             }
             // What a user's log needs for adding their handheld to the allowlist
             static std::set<std::string> described;
-            if (described.insert(ident).second) {
+            if (Settings::values.console_debug_probes.GetValue() &&
+                described.insert(ident).second) {
                 const Uint16 vendor = SDL_GetJoystickVendorForID(id);
                 // (SDL has no name for an unknown type: null, which fmt refuses)
                 const char* type = SDL_GetGamepadStringForType(SDL_GetGamepadTypeForID(id));
