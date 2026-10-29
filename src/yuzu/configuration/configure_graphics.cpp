@@ -4,8 +4,10 @@
 // SPDX-FileCopyrightText: 2016 Citra Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <algorithm>
 #include <functional>
 #include <vector>
+#include <QStandardItemModel>
 #include <QBoxLayout>
 #include <QCheckBox>
 #include <QColorDialog>
@@ -79,7 +81,10 @@ ConfigureGraphics::ConfigureGraphics(
         }
         index++;
     }
-    if (static_cast<unsigned long>(index) < vsync_mode_combobox_enum_map.size()) {
+    // (A mode greyed out for Game Mode is never selected)
+    const auto* vsync_model = qobject_cast<QStandardItemModel*>(vsync_mode_combobox->model());
+    if (static_cast<unsigned long>(index) < vsync_mode_combobox_enum_map.size() &&
+        (!vsync_model || vsync_model->item(index)->isEnabled())) {
         vsync_mode_combobox->setCurrentIndex(index);
     }
 
@@ -167,6 +172,35 @@ void ConfigureGraphics::PopulateVSyncModeSelection(bool use_setting) {
             vsync_mode_combobox->setCurrentIndex(index);
         }
         index++;
+    }
+
+    // In Steam's Game Mode, gamescope offers only some present modes: the others are listed
+    // greyed out, saying how to get them, rather than missing without a word
+    const bool gamescope = qEnvironmentVariableIsSet("GAMESCOPE_WAYLAND_DISPLAY") ||
+                           qgetenv("XDG_CURRENT_DESKTOP") == "gamescope";
+    if (gamescope && backend == Settings::RendererBackend::Vulkan) {
+        auto* model = qobject_cast<QStandardItemModel*>(vsync_mode_combobox->model());
+        for (const auto missing : {VK_PRESENT_MODE_IMMEDIATE_KHR, VK_PRESENT_MODE_FIFO_RELAXED_KHR,
+                                   VK_PRESENT_MODE_MAILBOX_KHR}) {
+            if (std::find(present_modes.begin(), present_modes.end(), missing) !=
+                present_modes.end()) {
+                continue;
+            }
+            const auto mode_name = TranslateVSyncMode(missing, backend);
+            if (mode_name.isEmpty() || !model) {
+                continue;
+            }
+            vsync_mode_combobox->insertItem(index, tr("%1 - unavailable in Game Mode").arg(mode_name));
+            vsync_mode_combobox->setItemData(
+                index,
+                tr("Steam's Game Mode does not offer this mode by default. In Steam's Performance "
+                   "settings, turn off Disable Frame Limit and turn on Allow Tearing, then open "
+                   "these settings again."),
+                Qt::ToolTipRole);
+            model->item(index)->setEnabled(false);
+            vsync_mode_combobox_enum_map.push_back(missing);
+            index++;
+        }
     }
 
     if (!Settings::IsConfiguringGlobal()) {
