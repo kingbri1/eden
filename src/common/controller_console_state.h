@@ -39,6 +39,10 @@ struct ControllerConsoleState {
         /// Its Bluetooth controller can be turned off: 0 no (not Bluetooth), 1 not yet (several
         /// of its model, until a button press tells them apart), 2 yes
         int turn_off = 0;
+        /// The player its controller started as (-1: this one), and whether its player was a
+        /// guess on a reconnect
+        int origin = -1;
+        bool guessed = false;
     };
     /// True while an automatic assignment mode runs (the engine owns the players)
     bool engine_active = false;

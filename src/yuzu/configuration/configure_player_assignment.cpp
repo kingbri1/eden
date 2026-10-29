@@ -488,16 +488,19 @@ ConfigurePlayerAssignment::ConfigurePlayerAssignment(QWidget* parent) : QWidget(
     indent->addWidget(handheld_panel);
     mode_layout->addLayout(indent);
 
-    // Under Steam: read the controllers directly instead of through Steam Input
-    steam_panel = new QFrame(mode_box);
-    steam_panel->setObjectName(QStringLiteral("steamPanel"));
-    steam_panel->setStyleSheet(
-        Themed(QStringLiteral("#steamPanel { border: 1px solid palette(mid); "
-                              "border-radius: 8px; background: palette(base); }")));
-    auto* steam_layout = new QHBoxLayout(steam_panel);
-    steam_layout->setContentsMargins(12, 8, 12, 8);
+    mode_info = new QLabel(mode_box);
+    mode_info->setWordWrap(true);
+    mode_layout->addWidget(mode_info);
+    layout->addWidget(mode_box);
+
+    // Under Steam, for both Modern Console modes: read the controllers directly instead of
+    // through Steam Input
+    auto* steam_box = new QGroupBox(tr("Steam Input"), this);
+    steam_panel = steam_box;
+    auto* steam_layout = new QHBoxLayout(steam_box);
     auto* steam_text = new QVBoxLayout();
-    auto* steam_title = new QLabel(tr("Bypass Steam Input"), steam_panel);
+    steam_text->setSpacing(1);
+    auto* steam_title = new QLabel(tr("Bypass Steam Input"), steam_box);
     steam_title->setFont(title_font);
     auto* steam_note = new QLabel(
         tr("Eden reads your controllers directly instead of through Steam's virtual "
@@ -505,15 +508,15 @@ ConfigurePlayerAssignment::ConfigurePlayerAssignment(QWidget* parent) : QWidget(
            "doesn't work under Steam, such as the Steam Controller or a newer controller. Takes "
            "effect after restarting Eden; connected controllers may be assigned to different "
            "players."),
-        steam_panel);
+        steam_box);
     steam_note->setWordWrap(true);
     steam_note->setObjectName(QStringLiteral("note"));
-    steam_restart = new QLabel(tr("Restart Eden to apply this change."), steam_panel);
+    steam_restart = new QLabel(tr("Restart Eden to apply this change."), steam_box);
     steam_text->addWidget(steam_title);
     steam_text->addWidget(steam_note);
     steam_text->addWidget(steam_restart);
     steam_layout->addLayout(steam_text, 1);
-    steam_switch = new ToggleSwitch(steam_panel);
+    steam_switch = new ToggleSwitch(steam_box);
     steam_switch->setToolTip(tr("On: Eden reads the controllers directly"));
     steam_layout->addWidget(steam_switch, 0, Qt::AlignVCenter);
     original_bypass = Settings::values.console_bypass_steam.GetValue();
@@ -522,14 +525,7 @@ ConfigurePlayerAssignment::ConfigurePlayerAssignment(QWidget* parent) : QWidget(
         Settings::values.console_bypass_steam.SetValue(on);
         UpdateModeUi();
     });
-    auto* steam_indent = new QHBoxLayout();
-    steam_indent->setContentsMargins(16, 0, 0, 0);
-    steam_indent->addWidget(steam_panel);
-    mode_layout->addLayout(steam_indent);
-    mode_info = new QLabel(mode_box);
-    mode_info->setWordWrap(true);
-    mode_layout->addWidget(mode_info);
-    layout->addWidget(mode_box);
+    layout->addWidget(steam_box);
 
     // Assign Handheld Controller: declare the handheld's own controller instead of guessing it.
     // Shown for that mode only.
@@ -1024,11 +1020,12 @@ void ConfigurePlayerAssignment::RefreshPlayers() {
     QString signature = QString::number(swap_from) + QLatin1Char(';') +
                         profiles.join(QLatin1Char(',')) + QLatin1Char(';');
     for (const auto& entry : players) {
-        signature += QString::number(entry.player) + QLatin1Char(':') +
-                     QString::fromStdString(entry.name) + QLatin1Char('/') +
-                     QString::fromStdString(entry.profile) +
-                     (entry.leaving ? QStringLiteral("x") : QString{}) +
-                     QString::number(entry.turn_off) + QLatin1Char('|');
+        signature +=
+            QString::number(entry.player) + QLatin1Char(':') + QString::fromStdString(entry.name) +
+            QLatin1Char('/') + QString::fromStdString(entry.profile) +
+            (entry.leaving ? QStringLiteral("x") : QString{}) + QString::number(entry.turn_off) +
+            QLatin1Char('/') + QString::number(entry.origin) +
+            (entry.guessed ? QStringLiteral("?") : QString{}) + QLatin1Char('|');
     }
     if (!handheld_has_player) {
         signature += QStringLiteral("h:") + QString::fromStdString(handheld_name);
@@ -1058,15 +1055,40 @@ void ConfigurePlayerAssignment::RefreshPlayers() {
             grip->setToolTip(tr("Drag onto another player to swap"));
             grip->setObjectName(QStringLiteral("note"));
             line->addWidget(grip);
-            // The player's badge, in the overlay's colour for that player
-            auto* badge = new QLabel(QStringLiteral("P%1").arg(player + 1), row);
+            // The player's badge, in the overlay's colour for that player, with room on its
+            // corner for a mark: a guess on a reconnect (?), else a dot in the colour of the
+            // player the controller started as
+            auto* badge_box = new QWidget(row);
+            badge_box->setFixedSize(40, 24);
+            auto* badge = new QLabel(QStringLiteral("P%1").arg(player + 1), badge_box);
             badge->setAlignment(Qt::AlignCenter);
-            badge->setFixedSize(34, 20);
+            badge->setGeometry(0, 3, 34, 20);
             badge->setStyleSheet(
                 QStringLiteral("QLabel { background: %1; color: white; "
                                "border-radius: 10px; font-weight: bold; }")
                     .arg(PlayerColors[static_cast<std::size_t>(player) % 8].name()));
-            line->addWidget(badge);
+            if (!entry.leaving && (entry.guessed || entry.origin >= 0)) {
+                auto* mark = new QLabel(badge_box);
+                if (entry.guessed) {
+                    mark->setText(QStringLiteral("?"));
+                    mark->setAlignment(Qt::AlignCenter);
+                    mark->setGeometry(27, 0, 13, 13);
+                    mark->setStyleSheet(QStringLiteral(
+                        "QLabel { background: white; color: #0e0e12; border: 1px solid #0e0e12; "
+                        "border-radius: 6px; font-weight: bold; font-size: 9px; }"));
+                    badge_box->setToolTip(tr("This controller came back without a way to tell "
+                                             "which one it is. Swap it if it's in the wrong "
+                                             "place."));
+                } else {
+                    mark->setGeometry(29, 1, 10, 10);
+                    mark->setStyleSheet(
+                        QStringLiteral("QLabel { background: %1; border: 1px solid #0e0e12; "
+                                       "border-radius: 5px; }")
+                            .arg(PlayerColors[static_cast<std::size_t>(entry.origin) % 8].name()));
+                    badge_box->setToolTip(tr("Started as P%1").arg(entry.origin + 1));
+                }
+            }
+            line->addWidget(badge_box);
             line->addWidget(new QLabel(QString::fromStdString(entry.name), row), 1);
             const bool live = !entry.leaving;
 

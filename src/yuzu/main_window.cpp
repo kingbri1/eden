@@ -3278,6 +3278,26 @@ void MainWindow::RenderControllerOverlay() {
         painter.setFont(badge_font);
         painter.setPen(Qt::white);
         painter.drawText(badge_rect, Qt::AlignCenter, QStringLiteral("P%1").arg(row.player + 1));
+        // On the badge's corner: a guess on a reconnect (?), else a dot in the colour of the
+        // player the controller started as
+        if (!gone && (row.guessed || row.origin >= 0)) {
+            const QPointF corner(badge_rect.right() - 1, badge_rect.top() + 1);
+            painter.setPen(QPen(QColor(14, 14, 18), 1.5));
+            if (row.guessed) {
+                painter.setBrush(Qt::white);
+                painter.drawEllipse(corner, 6, 6);
+                QFont mark_font = badge_font;
+                mark_font.setPixelSize(9);
+                painter.setFont(mark_font);
+                painter.setPen(QColor(14, 14, 18));
+                painter.drawText(QRectF(corner.x() - 6, corner.y() - 6, 12, 12), Qt::AlignCenter,
+                                 QStringLiteral("?"));
+            } else {
+                painter.setBrush(player_color(row.origin));
+                painter.drawEllipse(corner, 4.5, 4.5);
+            }
+            painter.setPen(Qt::NoPen);
+        }
         painter.setFont(name_font);
         painter.setPen(gone ? QColor(255, 255, 255, 120) : QColor(240, 240, 240));
         painter.drawText(QRect(1 + inner + badge_w + 8, at_y, name_w + 4, row_h),
@@ -4101,6 +4121,9 @@ void MainWindow::ApplyConsoleControllerMode() {
             }
             u32 new_builtin = builtin_pad_id;
             const std::set<u32> benched_before = benched_pads;
+            const auto address_before = inst_address;
+            const auto origin_before = pad_origin;
+            const auto guessed_before = pad_guessed;
             for (const auto& [to, from] : moves) {
                 const auto slot = old_slot.find(from);
                 LOG_INFO(Frontend, "console-mode: Steam moved {} from inst={} to inst={} (P{})",
@@ -4117,6 +4140,20 @@ void MainWindow::ApplyConsoleControllerMode() {
                     benched_pads.insert(to);
                 } else {
                     benched_pads.erase(to);
+                }
+                const auto carry = [from, to](auto& now_map, const auto& before) {
+                    if (const auto it = before.find(from); it != before.end()) {
+                        now_map[to] = it->second;
+                    } else {
+                        now_map.erase(to);
+                    }
+                };
+                carry(inst_address, address_before);
+                carry(pad_origin, origin_before);
+                if (guessed_before.contains(from)) {
+                    pad_guessed.insert(to);
+                } else {
+                    pad_guessed.erase(to);
                 }
             }
             builtin_pad_id = new_builtin;
@@ -4232,6 +4269,8 @@ void MainWindow::ApplyConsoleControllerMode() {
             pad_slots.clear();
             pad_identity.clear();
             pad_sets.clear();
+            address_origin.clear();
+            address_claims.clear();
             slot_set = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9};
             set_before_profile.clear();
             LOG_INFO(Frontend, "console-mode: left, the user's players are restored");
@@ -4746,6 +4785,22 @@ void MainWindow::ApplyConsoleControllerMode() {
         }
     }
 
+    // The addresses of the Bluetooth controllers holding players, kept while their players are
+    // held for them; promises to away controllers last as long as a reservation (45 seconds)
+    const auto now_steady = std::chrono::steady_clock::now();
+    for (const auto& [id, ident] : live) {
+        if (const auto known = pad_bluetooth.find(BluetoothKey(id));
+            known != pad_bluetooth.end() && !known->second.empty()) {
+            inst_address[id] = known->second;
+            if (const auto origin = pad_origin.find(id); origin != pad_origin.end()) {
+                address_origin.try_emplace(known->second, origin->second);
+            }
+        }
+    }
+    std::erase_if(address_claims, [&](const auto& e) {
+        return now_steady - e.second.at > std::chrono::seconds{45};
+    });
+
     // New pads claim the lowest free slot; the handheld's own pad is skipped while
     // others are around. The claim order follows the pads' player index where one exists:
     // under Steam that is the ordering players expect, not instance-number luck.
@@ -4778,6 +4833,58 @@ void MainWindow::ApplyConsoleControllerMode() {
         // P3 with P1 left dead. The index orders the claims (the sort above); the slots
         // always fill lowest-free below.
         if (pad_slots.find(id) == pad_slots.end()) {
+            // How many controllers are away: with more than one, a returning controller that
+            // can't be told apart is a guess
+            const auto away = std::count_if(pad_slots.begin(), pad_slots.end(),
+                                            [&](const auto& e) { return !live.contains(e.first); });
+            // A Bluetooth controller comes back to its own player by its address: Steam's
+            // handles follow the connection order after a reconnect, not the controller
+            const std::string bt_key = BluetoothKey(id);
+            const auto known = pad_bluetooth.find(bt_key);
+            const std::string address =
+                known != pad_bluetooth.end() ? known->second : std::string{};
+            if (!address.empty()) {
+                const auto own =
+                    std::find_if(pad_slots.begin(), pad_slots.end(), [&](const auto& e) {
+                        if (live.contains(e.first)) {
+                            return false;
+                        }
+                        const auto held = inst_address.find(e.first);
+                        return held != inst_address.end() && held->second == address;
+                    });
+                int slot = -1;
+                int origin = -1;
+                if (own != pad_slots.end()) {
+                    slot = own->second;
+                    const auto from = pad_origin.find(own->first);
+                    origin = from != pad_origin.end() ? from->second : slot;
+                    pad_identity.erase(own->first);
+                    pad_slots.erase(own);
+                } else if (const auto claim = address_claims.find(address);
+                           claim != address_claims.end() && !used.contains(claim->second.slot)) {
+                    // (Its player was taken by a guess, then given back)
+                    slot = claim->second.slot;
+                    origin = claim->second.origin;
+                    address_claims.erase(claim);
+                }
+                if (slot >= 0) {
+                    LOG_INFO(Frontend, "console-mode: {} back as P{} by its Bluetooth address",
+                             address, slot + 1);
+                    pad_slots[id] = slot;
+                    pad_identity[id] = ident;
+                    pad_origin[id] = origin;
+                    used.insert(slot);
+                    changed = true;
+                    continue;
+                }
+            } else if (pad_bt_pending.contains(bt_key) && away > 1) {
+                // Its address is about to be known (a button press tells identical controllers
+                // apart): wait for it a moment rather than guess
+                const auto since = claim_wait_since.try_emplace(id, now_steady).first->second;
+                if (now_steady - since < std::chrono::seconds{3}) {
+                    continue;
+                }
+            }
             // Reclaim a dangling reservation when the identity matches. A unique match is the
             // pad's own slot. Identical pads (several Xbox pads through Steam Input) share an
             // identity, so which reservation is whose cannot be known - but skipping them all
@@ -4827,9 +4934,22 @@ void MainWindow::ApplyConsoleControllerMode() {
                 }
             }
             if (matches == 1) {
+                // With several away and nothing to tell them apart, this is a guess: marked (?)
+                // until its address proves it or the user swaps it. The player stays promised to
+                // the controller that held it, by its address, should that one come back.
+                const bool guessed = away > 1;
                 LOG_INFO(Frontend,
-                         "console-mode: reclaim inst={} ident={} takes slot {} from dead inst={}",
-                         id, ident, match->second, match->first);
+                         "console-mode: reclaim inst={} ident={} takes slot {} from dead inst={}{}",
+                         id, ident, match->second, match->first, guessed ? " (a guess)" : "");
+                const auto from = pad_origin.find(match->first);
+                pad_origin[id] = from != pad_origin.end() ? from->second : match->second;
+                if (guessed) {
+                    pad_guessed.insert(id);
+                    if (const auto held = inst_address.find(match->first);
+                        held != inst_address.end()) {
+                        address_claims[held->second] = {match->second, pad_origin[id], now_steady};
+                    }
+                }
                 pad_slots[id] = match->second;
                 pad_identity[id] = ident;
                 pad_identity.erase(match->first);
@@ -4845,6 +4965,9 @@ void MainWindow::ApplyConsoleControllerMode() {
                              slot);
                     pad_slots[id] = slot;
                     pad_identity[id] = ident;
+                    // (A known Bluetooth controller keeps the player it started as)
+                    const auto first = address_origin.find(address);
+                    pad_origin[id] = first != address_origin.end() ? first->second : slot;
                     used.insert(slot);
                     assigned = true;
                     changed = true;
@@ -4872,6 +4995,7 @@ void MainWindow::ApplyConsoleControllerMode() {
                                  ident, slot);
                         pad_slots[id] = slot;
                         pad_identity[id] = ident;
+                        pad_origin[id] = slot;
                         used.insert(slot);
                         changed = true;
                         break;
@@ -4879,6 +5003,48 @@ void MainWindow::ApplyConsoleControllerMode() {
                 }
             }
         }
+    }
+
+    // What is kept per connection lasts while the pad is live or its player is held for it
+    {
+        const auto kept = [&](u32 id) { return live.contains(id) || pad_slots.contains(id); };
+        std::erase_if(inst_address, [&](const auto& e) { return !kept(e.first); });
+        std::erase_if(pad_origin, [&](const auto& e) { return !kept(e.first); });
+        std::erase_if(pad_guessed, [&](u32 id) { return !kept(id); });
+        std::erase_if(claim_wait_since, [&](const auto& e) {
+            return !live.contains(e.first) || pad_slots.contains(e.first);
+        });
+    }
+
+    // A guessed controller whose address became known: right where it is (the guess held), or
+    // moved to the player it really had, the guessed one left free for its controller
+    for (auto it = pad_guessed.begin(); it != pad_guessed.end();) {
+        const u32 id = *it;
+        const auto known = pad_bluetooth.find(BluetoothKey(id));
+        const auto at = pad_slots.find(id);
+        if (!live.contains(id) || at == pad_slots.end() || known == pad_bluetooth.end() ||
+            known->second.empty()) {
+            ++it;
+            continue;
+        }
+        const std::string& address = known->second;
+        const auto own = std::find_if(pad_slots.begin(), pad_slots.end(), [&](const auto& e) {
+            const auto held = inst_address.find(e.first);
+            return !live.contains(e.first) && held != inst_address.end() && held->second == address;
+        });
+        if (own != pad_slots.end()) {
+            LOG_INFO(Frontend, "console-mode: {} was guessed as P{}: moved back to P{}", address,
+                     at->second + 1, own->second + 1);
+            const auto from = pad_origin.find(own->first);
+            pad_origin[id] = from != pad_origin.end() ? from->second : own->second;
+            at->second = own->second;
+            pad_identity.erase(own->first);
+            pad_slots.erase(own);
+            changed = true;
+        } else {
+            address_claims.erase(address); // (the guess was right)
+        }
+        it = pad_guessed.erase(it);
     }
 
     // Swaps requested from the settings or the overlay: the two players' pads trade slots (or
@@ -4914,6 +5080,9 @@ void MainWindow::ApplyConsoleControllerMode() {
             if (pad_b) {
                 pad_slots[pad_b] = a;
             }
+            // (A swap is the user's say: a guess is settled)
+            pad_guessed.erase(pad_a);
+            pad_guessed.erase(pad_b);
             LOG_INFO(Frontend, "console-mode: swap P{} <-> P{} (inst={} inst={})", a + 1, b + 1,
                      pad_a, pad_b);
             changed = true;
@@ -5331,9 +5500,13 @@ void MainWindow::ApplyConsoleControllerMode() {
             if (flash != 0 && gone == 0 && green_at == 0 && now_ms - flash_since >= flash_ms) {
                 flash = 0;
             }
+            const auto started = pad ? pad_origin.find(pad) : pad_origin.end();
+            const int origin =
+                started != pad_origin.end() && started->second != i ? started->second : -1;
+            const bool guessed = pad && pad_guessed.contains(pad);
             overlay_rows.push_back({i,
                                     QStringLiteral("P%1: %2").arg(i + 1).arg(overlay_row_name[i]),
-                                    gone != 0 ? 0u : pad, flash, flash_since});
+                                    gone != 0 ? 0u : pad, flash, flash_since, origin, guessed});
             const std::string key = pad ? BluetoothKey(pad) : std::string{};
             const auto address = pad_bluetooth.find(key);
             const int turn_off = address != pad_bluetooth.end() && !address->second.empty() ? 2
@@ -5341,7 +5514,7 @@ void MainWindow::ApplyConsoleControllerMode() {
                                                                                             : 0;
             tab_rows.push_back({i, overlay_row_name[i].toStdString(), false, gone != 0, flash,
                                 flash_since, ConsoleBindingSets()[slot_set[i]].profile_name,
-                                turn_off});
+                                turn_off, origin, guessed});
         }
         {
             std::string handheld_name;

@@ -87,8 +87,8 @@ private:
     QButtonGroup* manual_group = nullptr;
     QFrame* handheld_panel = nullptr;
     QAbstractButton* handheld_switch = nullptr;
-    /// Bypass Steam Input (under Steam), below the handheld option
-    QFrame* steam_panel = nullptr;
+    /// Bypass Steam Input (under Steam), a card of its own for both Modern Console modes
+    QWidget* steam_panel = nullptr;
     QAbstractButton* steam_switch = nullptr;
     QLabel* steam_restart = nullptr;
     bool original_bypass = false;

@@ -577,6 +577,24 @@ private:
     /// connection instance -> player slot; entries survive a disconnect so the pad
     /// reclaims its own player when it returns
     std::map<u32, int> pad_slots;
+    /// Per connection: the Bluetooth address of its controller (kept while its player is held
+    /// for it), the player it started as this session, and whether its player was a guess on a
+    /// reconnect (several away, nothing to tell them apart)
+    std::map<u32, std::string> inst_address;
+    std::map<u32, int> pad_origin;
+    std::set<u32> pad_guessed;
+    /// Returning pads waiting a moment for their Bluetooth address before they claim a player
+    std::map<u32, std::chrono::steady_clock::time_point> claim_wait_since;
+    /// Players taken by a guess, kept for the Bluetooth controller that held them
+    struct AddressClaim {
+        int slot;
+        int origin;
+        std::chrono::steady_clock::time_point at;
+    };
+    std::map<std::string, AddressClaim> address_claims;
+    /// Each Bluetooth controller's starting player, by address: kept through Turn Off and
+    /// reconnects
+    std::map<std::string, int> address_origin;
     /// The mode last logged (a change is logged), and each player's refused controller type
     /// as last logged
     std::optional<Settings::AppletMode> logged_mode;
@@ -644,6 +662,9 @@ private:
         u32 pad;
         int flash;
         qint64 flash_since;
+        /// The player its controller started as (-1: this one), and whether it was a guess
+        int origin = -1;
+        bool guessed = false;
     };
     std::vector<OverlayRow> overlay_rows;
     std::vector<bool> overlay_blink;
