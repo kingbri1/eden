@@ -1043,7 +1043,8 @@ void ConfigurePlayerAssignment::RefreshPlayers() {
             profile->setToolTip(tr("Mapping profile for P%1's controller").arg(player + 1));
             // One width for every row, whatever the profile's name
             profile->setFixedWidth(170);
-            profile->setEnabled(live && (!profiles.isEmpty() || !entry.profile.empty()));
+            // (A profile name with no file behind it shows as none: there is nothing to pick)
+            profile->setEnabled(live && !profiles.isEmpty());
             const auto take_off = [player] {
                 auto& console = Common::GetControllerConsoleState();
                 std::scoped_lock lock{console.mutex};
@@ -1067,9 +1068,13 @@ void ConfigurePlayerAssignment::RefreshPlayers() {
             connect(clear, &QToolButton::clicked, this, take_off);
             line->addWidget(profile);
 
+            // (A disabled arrow is drawn plain, not as a dark block)
+            const QString plain_disabled =
+                QStringLiteral("QToolButton:disabled { background: transparent; border: none; }");
             auto* up = new QToolButton(row);
             up->setArrowType(Qt::UpArrow);
             up->setAutoRaise(true);
+            up->setStyleSheet(plain_disabled);
             up->setToolTip(tr("Swap with P%1").arg(player));
             up->setEnabled(live && player > 0);
             connect(up, &QToolButton::clicked, this,
@@ -1078,6 +1083,7 @@ void ConfigurePlayerAssignment::RefreshPlayers() {
             auto* down = new QToolButton(row);
             down->setArrowType(Qt::DownArrow);
             down->setAutoRaise(true);
+            down->setStyleSheet(plain_disabled);
             down->setToolTip(tr("Swap with P%1").arg(player + 2));
             down->setEnabled(live && player < last_player);
             connect(down, &QToolButton::clicked, this,
