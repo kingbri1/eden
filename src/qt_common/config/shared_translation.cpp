@@ -33,14 +33,24 @@ std::unique_ptr<TranslationMap> InitializeTranslations(QObject* parent) {
     // Toggled from View > Show Controller Overlay
     INSERT(Settings, console_debug_overlay, QString(), QString());
     INSERT(Settings, console_hints, QString(), QString());
+    INSERT(Settings, console_history, QString(), QString());
+    INSERT(Settings, console_history_size, QString(), QString());
+    INSERT(Settings, console_history_seconds, QString(), QString());
+    INSERT(Settings, console_history_gaps, QString(), QString());
+    INSERT(Settings, console_debug_probes, QString(), QString());
+    INSERT(Settings, modern_seat_profiles, QString(), QString());
     INSERT(Settings, builtin_pad_identity, QString(), QString());
     INSERT(Settings, builtin_pad_steam_handle, QString(), QString());
+    INSERT(Settings, builtin_pad_blocked, QString(), QString());
     INSERT(Settings, builtin_pad_manual, QString(), QString());
 
     // Applets
     INSERT(Settings, cabinet_applet_mode, tr("Amiibo editor"), QString());
     // Chosen in Controls > Players ("Assign players")
-    INSERT(Settings, controller_applet_mode, QString(), QString());
+    INSERT(Settings, controller_applet_mode, tr("Controller configuration"),
+           tr("How games get their players: Modern Console and Handheld Console assign them "
+              "automatically; Custom Frontend and Real Hardware show a controller applet; "
+              "Disabled uses the players set in each player's tab."));
     INSERT(Settings, data_erase_applet_mode, tr("Data erase"), QString());
     INSERT(Settings, error_applet_mode, tr("Error"), QString());
     INSERT(Settings, net_connect_applet_mode, tr("Net connect"), QString());
@@ -381,11 +391,11 @@ std::unique_ptr<ComboboxTranslationMap> ComboboxEnumeration(QObject* parent) {
     // Intentionally skipping VSyncMode to let the UI fill that one out
     translations->insert({Settings::EnumMetadata<Settings::AppletMode>::Index(),
                           {
-                              PAIR(AppletMode, HLE, tr("Custom frontend")),
-                              PAIR(AppletMode, LLE, tr("Real applet")),
+                              PAIR(AppletMode, HLE, tr("Custom Frontend")),
+                              PAIR(AppletMode, LLE, tr("Real Hardware")),
                               PAIR(AppletMode, Disabled, tr("Disabled")),
-                              PAIR(AppletMode, ConsoleMode, tr("Console Mode")),
-                              PAIR(AppletMode, HandheldConsoleMode, tr("Handheld Console Mode")),
+                              PAIR(AppletMode, ConsoleMode, tr("Modern Console")),
+                              PAIR(AppletMode, HandheldConsoleMode, tr("Handheld Console")),
                           }});
 
     translations->insert({Settings::EnumMetadata<Settings::SpirvOptimizeMode>::Index(),

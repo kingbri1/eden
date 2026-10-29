@@ -20,7 +20,9 @@ class QFrame;
 class QVBoxLayout;
 class QLabel;
 class QPushButton;
+class QSlider;
 class QTimer;
+class QToolButton;
 class QWidget;
 
 /// The Controllers tab of the Controls settings: how players are assigned (by hand, or
@@ -53,6 +55,8 @@ public:
     static QColor Accent(const QWidget* widget);
     /// A player's colour, as the overlay and the player badges draw it
     static QColor PlayerColor(int player);
+    /// A ✕ inside a drop-down, left of its arrow (hidden or shown by the caller)
+    static QToolButton* AddClearButton(QComboBox* combo);
     /// Lets the open lists of a widget's drop-downs follow ModernComboStyle
     static void ModernizeCombos(QWidget* root);
 
@@ -74,28 +78,50 @@ private:
     void RequestSwap(int a, int b);
     void RequestRumble(int player);
 
-    /// The handler (Manual, Modern Console, Real Hardware) and, under Modern Console, whether
-    /// this is a handheld with built-in controls (Docked Handheld). Legacy Applet has no button
-    /// for now; a setting already on it is kept until another pick.
-    enum Handler { HandlerManual, HandlerModern, HandlerReal };
+    /// The handler (Manual, Modern Console). Under Manual, the controller applet a game sees
+    /// (Disabled, Custom Frontend, Real Hardware); under Modern Console, whether this is a
+    /// handheld with built-in controls (Docked Handheld).
+    enum Handler { HandlerManual, HandlerModern };
     QButtonGroup* handler_group = nullptr;
+    QFrame* manual_panel = nullptr;
+    QButtonGroup* manual_group = nullptr;
     QFrame* handheld_panel = nullptr;
     QAbstractButton* handheld_switch = nullptr;
-    bool legacy_applet = false;
     QLabel* mode_info = nullptr;
     QWidget* display_box = nullptr;
+    QWidget* about_box = nullptr;
     /// The scrolled page the cards stack in
     QVBoxLayout* content_layout = nullptr;
     QAbstractButton* overlay_toggle = nullptr;
     bool original_overlay = false;
     QAbstractButton* hints_toggle = nullptr;
     bool original_hints = true;
+    /// The overlay's button history options (indented under Controller Overlay)
+    QWidget* history_options = nullptr;
+    QAbstractButton* history_toggle = nullptr;
+    QSlider* history_size = nullptr;
+    QSlider* history_seconds = nullptr;
+    QAbstractButton* gaps_toggle = nullptr;
+    bool original_history = true;
+    int original_history_size = 10;
+    int original_history_seconds = 5;
+    bool original_history_gaps = false;
+    /// Debug Probes, in the Troubleshooting card
+    QWidget* debug_box = nullptr;
+    QAbstractButton* probes_toggle = nullptr;
+    bool original_probes = false;
     QWidget* now_box = nullptr;
 
     QWidget* builtin_row = nullptr;
     QComboBox* builtin_picker = nullptr;
     QPushButton* builtin_identify = nullptr;
     QLabel* builtin_status = nullptr;
+    /// The ✕ inside the picker that removes the handheld's controller, and the removed one
+    /// kept from auto-detect, with the way to allow it again
+    QToolButton* builtin_remove = nullptr;
+    QWidget* blocked_row = nullptr;
+    QLabel* blocked_label = nullptr;
+    QPushButton* blocked_allow = nullptr;
     QString builtin_signature;
 
     QWidget* players_box = nullptr;

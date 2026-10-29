@@ -140,7 +140,7 @@ struct Values {
     // Applet
     SwitchableSetting<AppletMode> cabinet_applet_mode{linkage, AppletMode::LLE, "cabinet_applet_mode",
                                             Category::LibraryApplet};
-    SwitchableSetting<AppletMode> controller_applet_mode{linkage, AppletMode::Disabled, "controller_applet_mode",
+    SwitchableSetting<AppletMode> controller_applet_mode{linkage, AppletMode::HLE, "controller_applet_mode",
                                                Category::LibraryApplet};
     Setting<AppletMode> data_erase_applet_mode{linkage, AppletMode::HLE, "data_erase_applet_mode",
                                                Category::LibraryApplet};
@@ -206,9 +206,27 @@ struct Values {
     /// Show the controller debug overlay (the real pad state plus the logic's actions)
     SwitchableSetting<bool> console_debug_overlay{linkage, true, "console_debug_overlay",
                                                   Category::LibraryApplet};
+    /// Modern Console: the input profile each player number starts a session with, by name,
+    /// comma-separated in player order (empty: the player's usual controls)
+    Setting<std::string> modern_seat_profiles{linkage, std::string{}, "modern_seat_profiles",
+                                              Category::LibraryApplet};
     /// Name a controller on screen for a moment when it takes a player or leaves one
     SwitchableSetting<bool> console_hints{linkage, true, "console_hints",
                                           Category::LibraryApplet};
+    /// The overlay's button history: shown, how many inputs it keeps, how long each lasts (in
+    /// seconds), and the time between inputs
+    SwitchableSetting<bool> console_history{linkage, true, "console_history",
+                                            Category::LibraryApplet};
+    SwitchableSetting<int, true> console_history_size{
+        linkage, 10, 5, 20, "console_history_size", Category::LibraryApplet};
+    SwitchableSetting<int, true> console_history_seconds{
+        linkage, 5, 1, 30, "console_history_seconds", Category::LibraryApplet};
+    SwitchableSetting<bool> console_history_gaps{linkage, false, "console_history_gaps",
+                                                 Category::LibraryApplet};
+    /// Detailed controller traces in the log (every assignment tick), for bug reports. The
+    /// devices are described either way (what adding a handheld to the allowlist needs).
+    SwitchableSetting<bool> console_debug_probes{linkage, false, "console_debug_probes",
+                                                 Category::LibraryApplet};
 
     /// True when the user declared the handheld's own pad by hand (the picker or the
     /// Identify button); the auto latch must not overwrite it
@@ -221,6 +239,10 @@ struct Values {
 
     /// Under Steam Input, the Steam handle of the handheld's own pad: its virtual pad shares
     /// the GUID of every other one, but this handle stays the same across sessions
+    /// A controller the user removed as the handheld's own (its Steam handle under Steam, else
+    /// its identity): auto-detect leaves it alone until it is allowed again, picked or identified
+    SwitchableSetting<std::string> builtin_pad_blocked{linkage, std::string{}, "builtin_pad_blocked",
+                                                       Category::Core};
     SwitchableSetting<std::string> builtin_pad_steam_handle{
         linkage, std::string{}, "builtin_pad_steam_handle", Category::Core};
     SwitchableSetting<MemoryLayout, true> memory_layout_mode{linkage,

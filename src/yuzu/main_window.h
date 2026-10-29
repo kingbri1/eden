@@ -577,6 +577,17 @@ private:
     /// connection instance -> player slot; entries survive a disconnect so the pad
     /// reclaims its own player when it returns
     std::map<u32, int> pad_slots;
+    /// Pads whose player was removed: they sit out until they reconnect (connection instance)
+    std::set<u32> benched_pads;
+    /// When each player was last removed, and whether its controller was turned off
+    std::array<qint64, 10> removed_at{};
+    std::array<bool, 10> removed_off{};
+    /// Each live pad's Bluetooth address ("" when it is not on Bluetooth or unknown), and the
+    /// pads that may be on Bluetooth but can't be told apart from others of their model yet
+    /// (By the controller: its Steam handle under Steam, see BluetoothKey)
+    std::map<std::string, std::string> pad_bluetooth;
+    std::set<std::string> pad_bt_pending;
+    void LearnBluetoothPads();
     /// connection instance -> stable identity (serial, else model GUID), for matching a
     /// returning pad that comes back under a new instance
     std::map<u32, std::string> pad_identity;
@@ -586,6 +597,15 @@ private:
     /// player -> the set its controller carries, as of the last tick (the player's own when
     /// it has no controller)
     std::array<int, 10> slot_set{0, 1, 2, 3, 4, 5, 6, 7, 8, 9};
+    /// This session's binding sets, from the user's own (console_profile) with each seat's
+    /// profile on top: everything Modern Console changes (profiles, remaps) stays here, so
+    /// the user's own setup, which the manual modes use, is never touched
+    std::optional<std::array<Settings::PlayerInput, 10>> session_sets;
+    /// The set a change goes to: the session's, or a game's own profile set
+    Settings::PlayerInput& SessionSet(int set);
+    /// The profile each seat (player number) starts a session with
+    void ApplySeatProfiles();
+    void SetSeatProfile(int player, const std::string& name);
     /// A set's mappings before this session's first profile on it, for taking the profile off
     std::map<int, Settings::PlayerInput> set_before_profile;
     /// The handheld's own pad (connection instance): never a player while other pads are
@@ -627,24 +647,48 @@ private:
     std::set<u32> overlay_active_pads;
     /// Polls controller input faster than the assignment tick, for the blue highlight
     QTimer console_activity_timer;
+    /// The overlay's player rows as drawn (player, rectangle in the overlay image), for the
+    /// mouse: a row drags onto another to swap them, a click rumbles its controller
+    std::vector<std::pair<int, QRect>> overlay_hits;
+    int overlay_drag_player = -1;
+    int overlay_drag_dy = 0;
+    bool overlay_dragging = false;
+    QPoint overlay_press;
+    /// The row under the mouse, which shows its buttons (-1: none), and those buttons as drawn:
+    /// a swap with the player above (-1) or below (1), or remove (0)
+    int overlay_hover_player = -1;
+    bool overlay_button_down = false;
+    struct OverlayButton {
+        QRect rect;
+        int player;
+        int action;
+        int target;
+    };
+    std::vector<OverlayButton> overlay_buttons;
+    bool HandleOverlayMouse(QEvent* event);
+    /// The player whose tab the next settings dialog opens on (-1: as usual)
+    int open_player_tab = -1;
     /// Under gamescope, makes a window fill the screen (see the definition)
     void FitToScreenUnderGamescope(QWidget* window);
     void RenderControllerOverlay();
     void PollControllerActivity();
-    /// The last buttons each player pressed (emulated, as the game sees them), newest last,
-    /// for the overlay; cleared when another controller takes the player
+    /// The last buttons each controller pressed (emulated, as the game sees them), newest last,
+    /// for the overlay; by the controller's identity, so the history follows a controller that
+    /// swaps players. Buttons pressed together share their time.
     struct ButtonPress {
         int button;
         qint64 at;
     };
-    std::array<std::deque<ButtonPress>, 10> press_history{};
+    std::map<std::string, std::deque<ButtonPress>> press_history;
+    /// The controller each player's buttons were last read for: a new one starts from what it
+    /// holds, so changing controllers records no presses
+    std::array<std::string, 10> history_ident{};
     std::array<std::bitset<32>, 10> buttons_down{};
     /// Stick moves in the history: StickMoveButton + stick * 4 + direction (left, up, right,
     /// down), stick 0 the left one
     static constexpr int StickMoveButton = 64;
     /// The direction each player's sticks point, plus one (0 at rest)
     std::array<std::array<int, 2>, 10> stick_direction{};
-    std::array<qint64, 10> press_history_since{};
     /// Reads the players' buttons; true when the history changed (a press, or one expiring)
     bool PollButtonHistory();
     /// A controller named on screen for a moment: it joined as a player, or left one
@@ -653,6 +697,8 @@ private:
         int player;
         bool joined;
         qint64 at;
+        /// Left because it was removed (1), or removed and turned off (2)
+        int removed = 0;
     };
     std::vector<ControllerHint> controller_hints;
     /// The flashes already turned into hints, per player (green, red)
@@ -724,6 +770,7 @@ private:
                         std::string arguments, const bool needs_title);
 
 protected:
+    bool eventFilter(QObject* watched, QEvent* event) override;
     void dropEvent(QDropEvent* event) override;
     void dragEnterEvent(QDragEnterEvent* event) override;
     void dragMoveEvent(QDragMoveEvent* event) override;

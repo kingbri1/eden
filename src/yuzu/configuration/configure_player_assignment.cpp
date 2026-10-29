@@ -6,6 +6,7 @@
 #include <chrono>
 #include <cstdlib>
 #include <mutex>
+#include <tuple>
 
 #include <QAbstractButton>
 #include <QApplication>
@@ -21,13 +22,18 @@
 #include <QPainter>
 #include <QGroupBox>
 #include <QHBoxLayout>
+#include <QIcon>
+#include <QPixmap>
+#include <QResizeEvent>
 #include <QLabel>
 #include <QPushButton>
 #include <QButtonGroup>
 #include <QCheckBox>
 #include <QDir>
 #include <QRadioButton>
+#include <QAbstractItemView>
 #include <QScrollArea>
+#include <QSlider>
 #include <QStyledItemDelegate>
 #include <QTimer>
 #include <QToolButton>
@@ -92,6 +98,46 @@ protected:
     }
 };
 constexpr char PlayerMime[] = "application/x-eden-player";
+
+/// Keeps a drop-down's ✕ inside it, left of its arrow
+class ClearButtonPlacer : public QObject {
+public:
+    ClearButtonPlacer(QComboBox* combo_, QToolButton* button_)
+        : QObject(combo_), combo{combo_}, button{button_} {}
+
+protected:
+    bool eventFilter(QObject* watched, QEvent* event) override {
+        if (watched == combo && (event->type() == QEvent::Resize || event->type() == QEvent::Show)) {
+            button->move(combo->width() - 22 - button->width(),
+                         (combo->height() - button->height()) / 2);
+        }
+        return QObject::eventFilter(watched, event);
+    }
+
+private:
+    QComboBox* combo;
+    QToolButton* button;
+};
+
+/// The power symbol on Turn Off: white, grey while it waits
+QIcon PowerIcon() {
+    const auto draw = [](const QColor& color) {
+        QPixmap pixmap(QSize(14, 14) * 2);
+        pixmap.setDevicePixelRatio(2);
+        pixmap.fill(Qt::transparent);
+        QPainter painter{&pixmap};
+        painter.setRenderHint(QPainter::Antialiasing);
+        painter.setPen(QPen(color, 2, Qt::SolidLine, Qt::RoundCap));
+        painter.drawArc(QRectF(2, 2.5, 10, 10), 125 * 16, 290 * 16);
+        painter.drawLine(QPointF(7, 1), QPointF(7, 7));
+        painter.end();
+        return pixmap;
+    };
+    QIcon icon;
+    icon.addPixmap(draw(Qt::white), QIcon::Normal);
+    icon.addPixmap(draw(QColor(138, 143, 150)), QIcon::Disabled);
+    return icon;
+}
 
 /// One player in the list: a click rumbles its controller, and a long press (or a drag) picks
 /// it up to drop on another player, which swaps the two
@@ -198,10 +244,33 @@ private:
 
 } // Anonymous namespace
 
+QToolButton* ConfigurePlayerAssignment::AddClearButton(QComboBox* combo) {
+    auto* button = new QToolButton(combo);
+    button->setText(QStringLiteral("\u2715"));
+    button->setCursor(Qt::ArrowCursor);
+    button->setFixedSize(18, 18);
+    button->setStyleSheet(Themed(QStringLiteral(
+        "QToolButton { border: none; border-radius: 9px; background: transparent; "
+        "color: muted-text; padding: 0px; }"
+        "QToolButton:hover { background: palette(highlight); "
+        "color: palette(highlighted-text); }")));
+    // (Room for it between the text and the arrow)
+    combo->setStyleSheet(QStringLiteral("QComboBox { padding-right: 40px; }"));
+    combo->installEventFilter(new ClearButtonPlacer(combo, button));
+    return button;
+}
+
 QString ConfigurePlayerAssignment::Themed(QString style) {
     if (!UISettings::IsDarkTheme()) {
-        return style.replace(QStringLiteral("muted-text"), QStringLiteral("#7d838b"));
+        return style.replace(QStringLiteral("muted-text"), QStringLiteral("#7d838b"))
+            .replace(QStringLiteral("popup-base"), QStringLiteral("palette(base)"));
     }
+    // An open drop-down list is a window of its own, with nothing behind it: it takes the
+    // theme's background, solid (a tint there would show as white)
+    style.replace(QStringLiteral("popup-base"),
+                  QString::fromStdString(UISettings::values.theme).contains(QStringLiteral("midnight"))
+                      ? QStringLiteral("#19232D")
+                      : QStringLiteral("#31363B"));
     // Cards show the theme's own background (its widgets all paint it), fields and buttons a
     // light tint, and the accent is the dark theme's blue
     static const std::array<std::pair<const char*, const char*>, 8> dark{{
@@ -236,7 +305,7 @@ QString ConfigurePlayerAssignment::ModernComboStyle() {
         "QComboBox:hover, QComboBox:focus { border-color: palette(highlight); }"
         "QComboBox:disabled { color: palette(mid); }"
         // The open list: readable rows, the hovered one in the highlight colour
-        "QComboBox QAbstractItemView { background: palette(base); color: palette(text); "
+        "QComboBox QAbstractItemView { background: popup-base; color: palette(text); "
         "border: 1px solid palette(mid); outline: 0; padding: 2px; }"
         "QComboBox QAbstractItemView::item { min-height: 24px; padding: 0 8px; }"
         "QComboBox QAbstractItemView::item:hover, QComboBox QAbstractItemView::item:selected { "
@@ -249,6 +318,12 @@ void ConfigurePlayerAssignment::ModernizeCombos(QWidget* root) {
     for (auto* combo : root->findChildren<QComboBox*>()) {
         if (!combo->property("modern_list").toBool()) {
             combo->setItemDelegate(new QStyledItemDelegate(combo));
+            // The list sits in a frame of its own window, whose padding showed white under a
+            // dark theme: it takes the list's solid background
+            if (QWidget* frame = combo->view()->window(); frame && frame != combo->window()) {
+                frame->setStyleSheet(Themed(QStringLiteral(
+                    "QFrame { background: popup-base; border: 1px solid palette(mid); }")));
+            }
             combo->setProperty("modern_list", true);
         }
     }
@@ -335,11 +410,54 @@ ConfigurePlayerAssignment::ConfigurePlayerAssignment(QWidget* parent) : QWidget(
     auto* mode_layout = new QVBoxLayout(mode_box);
     handler_group = new QButtonGroup(this);
     auto* handler_row = new QHBoxLayout();
-    handler_row->addWidget(MakeSegmented(mode_box,
-                                     {tr("Manual"), tr("Real Hardware"), tr("Modern Console")},
-                                     {HandlerManual, HandlerReal, HandlerModern}, handler_group));
+    handler_row->addWidget(MakeSegmented(mode_box, {tr("Modern Console"), tr("Manual")},
+                                         {HandlerModern, HandlerManual}, handler_group));
     handler_row->addStretch(1);
     mode_layout->addLayout(handler_row);
+
+    // Under Manual: the controller applet a game sees when it asks for its players
+    manual_panel = new QFrame(mode_box);
+    manual_panel->setObjectName(QStringLiteral("manualPanel"));
+    manual_panel->setStyleSheet(
+        Themed(QStringLiteral("#manualPanel { border: 1px solid palette(mid); "
+                              "border-radius: 8px; background: palette(base); }")));
+    auto* manual_layout = new QVBoxLayout(manual_panel);
+    manual_layout->setContentsMargins(12, 8, 12, 8);
+    auto* manual_title = new QLabel(tr("Controller Applet"), manual_panel);
+    QFont manual_font = manual_title->font();
+    manual_font.setBold(true);
+    manual_title->setFont(manual_font);
+    auto* manual_note = new QLabel(tr("What a game sees when it asks for its players. These are "
+                                      "the legacy ways of handling controllers: they do not have "
+                                      "Modern Console's features, such as players assigned "
+                                      "automatically, the overlay and the hints."),
+                                   manual_panel);
+    manual_note->setWordWrap(true);
+    manual_note->setObjectName(QStringLiteral("note"));
+    manual_group = new QButtonGroup(this);
+    auto* manual_row = new QHBoxLayout();
+    manual_row->addWidget(MakeSegmented(
+        manual_panel, {tr("Disabled"), tr("Custom Frontend"), tr("Real Hardware")},
+        {static_cast<int>(Settings::AppletMode::Disabled), static_cast<int>(Settings::AppletMode::HLE),
+         static_cast<int>(Settings::AppletMode::LLE)},
+        manual_group));
+    manual_row->addStretch(1);
+    // What Manual itself does, under the choices
+    auto* manual_about = new QLabel(tr("In Manual, each player's controller is set by hand in "
+                                       "its player tab (P1 to P8) and stays until you change "
+                                       "it. The same choices are in System > Applets, also per "
+                                       "game."),
+                                    manual_panel);
+    manual_about->setWordWrap(true);
+    manual_about->setObjectName(QStringLiteral("note"));
+    manual_layout->addWidget(manual_title);
+    manual_layout->addWidget(manual_note);
+    manual_layout->addLayout(manual_row);
+    manual_layout->addWidget(manual_about);
+    auto* manual_indent = new QHBoxLayout();
+    manual_indent->setContentsMargins(16, 0, 0, 0);
+    manual_indent->addWidget(manual_panel);
+    mode_layout->addLayout(manual_indent);
 
     // Under Modern Console: whether this is a handheld with its own controls (Docked Handheld)
     handheld_panel = new QFrame(mode_box);
@@ -391,9 +509,34 @@ ConfigurePlayerAssignment::ConfigurePlayerAssignment(QWidget* parent) : QWidget(
     builtin_identify->setStyleSheet(OutlinedButtonStyle());
     picker_row->addWidget(builtin_identify);
     builtin_layout->addLayout(picker_row);
+    // The ✕ inside the picker removes the handheld's controller (auto-detect then skips it)
+    builtin_remove = AddClearButton(builtin_picker);
+    builtin_remove->setToolTip(tr("Not the handheld's controller: remove it. Auto-detect will "
+                                  "not pick it again until you allow it."));
+    builtin_remove->hide();
+    // A removed controller: said plainly, with the way to allow it again
+    blocked_row = new QWidget(builtin_row);
+    auto* blocked_line = new QHBoxLayout(blocked_row);
+    blocked_line->setContentsMargins(0, 0, 0, 0);
+    blocked_label = new QLabel(blocked_row);
+    blocked_label->setWordWrap(true);
+    blocked_label->setObjectName(QStringLiteral("note"));
+    blocked_line->addWidget(blocked_label, 1);
+    blocked_allow = new QPushButton(tr("Allow Again"), blocked_row);
+    blocked_allow->setCursor(Qt::PointingHandCursor);
+    blocked_allow->setStyleSheet(OutlinedButtonStyle());
+    blocked_line->addWidget(blocked_allow);
+    builtin_layout->addWidget(blocked_row);
     builtin_status = new QLabel(builtin_row);
     builtin_status->setWordWrap(true);
     builtin_layout->addWidget(builtin_status);
+    connect(builtin_remove, &QToolButton::clicked, this, [] {
+        auto& state = Common::GetControllerConsoleState();
+        std::scoped_lock lock{state.mutex};
+        state.builtin_remove_request = true;
+    });
+    connect(blocked_allow, &QPushButton::clicked, this,
+            [] { Settings::values.builtin_pad_blocked.SetValue(std::string{}); });
     layout->addWidget(builtin_row);
 
     // The players right now, as the engine assigned them
@@ -413,8 +556,8 @@ ConfigurePlayerAssignment::ConfigurePlayerAssignment(QWidget* parent) : QWidget(
     auto* display = new QGroupBox(tr("On-Screen Display"), this);
     display_box = display;
     auto* display_layout = new QVBoxLayout(display);
-    const auto add_switch = [display, display_layout](const QString& title,
-                                                      const QString& note) {
+    const auto add_switch_to = [display](QVBoxLayout* to, const QString& title,
+                                         const QString& note) {
         auto* line = new QHBoxLayout();
         auto* text = new QVBoxLayout();
         text->setSpacing(1);
@@ -430,8 +573,11 @@ ConfigurePlayerAssignment::ConfigurePlayerAssignment(QWidget* parent) : QWidget(
         line->addLayout(text, 1);
         auto* toggle = new ToggleSwitch(display);
         line->addWidget(toggle, 0, Qt::AlignVCenter);
-        display_layout->addLayout(line);
+        to->addLayout(line);
         return toggle;
+    };
+    const auto add_switch = [&](const QString& title, const QString& note) {
+        return add_switch_to(display_layout, title, note);
     };
     // The same switch as View > Show Controller Overlay
     overlay_toggle = add_switch(tr("Controller Overlay"),
@@ -441,6 +587,75 @@ ConfigurePlayerAssignment::ConfigurePlayerAssignment(QWidget* parent) : QWidget(
     overlay_toggle->setChecked(original_overlay);
     connect(overlay_toggle, &QAbstractButton::toggled, this,
             [](bool shown) { Settings::values.console_debug_overlay.SetValue(shown); });
+
+    // The overlay's own options, indented under it: the button history and how it shows
+    history_options = new QWidget(display);
+    auto* history_layout = new QVBoxLayout(history_options);
+    history_layout->setContentsMargins(20, 0, 0, 4);
+    history_toggle = add_switch_to(history_layout, tr("Button History"),
+                                   tr("The last buttons each player pressed, beside their row. "
+                                      "Buttons pressed together show as one input."));
+    // A slider with its value beside it
+    const auto add_slider = [this, display, history_layout](const QString& title, int min,
+                                                            int max, int value,
+                                                            const QString& unit) {
+        auto* line = new QHBoxLayout();
+        auto* label = new QLabel(title, display);
+        line->addWidget(label);
+        auto* slider = new QSlider(Qt::Horizontal, display);
+        slider->setRange(min, max);
+        slider->setValue(value);
+        slider->setPageStep(1);
+        line->addWidget(slider, 1);
+        auto* shown = new QLabel(display);
+        shown->setMinimumWidth(shown->fontMetrics().horizontalAdvance(unit.arg(max)) + 4);
+        shown->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        shown->setText(unit.arg(value));
+        line->addWidget(shown);
+        connect(slider, &QSlider::valueChanged, this,
+                [shown, unit](int v) { shown->setText(unit.arg(v)); });
+        auto* row = new QWidget(display);
+        row->setLayout(line);
+        line->setContentsMargins(0, 0, 0, 0);
+        history_layout->addWidget(row);
+        return std::pair{slider, row};
+    };
+    original_history = Settings::values.console_history.GetValue();
+    original_history_size = Settings::values.console_history_size.GetValue();
+    original_history_seconds = Settings::values.console_history_seconds.GetValue();
+    original_history_gaps = Settings::values.console_history_gaps.GetValue();
+    QWidget* size_row = nullptr;
+    QWidget* seconds_row = nullptr;
+    std::tie(history_size, size_row) =
+        add_slider(tr("Inputs kept"), 5, 20, original_history_size, tr("%1"));
+    std::tie(history_seconds, seconds_row) =
+        add_slider(tr("Expire after"), 1, 30, original_history_seconds, tr("%1 s"));
+    gaps_toggle = add_switch_to(history_layout, tr("Time Between Presses"),
+                                tr("The milliseconds between inputs, never more than the expire "
+                                   "time."));
+    display_layout->addWidget(history_options);
+    history_toggle->setChecked(original_history);
+    gaps_toggle->setChecked(original_history_gaps);
+    connect(history_toggle, &QAbstractButton::toggled, this,
+            [](bool shown) { Settings::values.console_history.SetValue(shown); });
+    connect(history_size, &QSlider::valueChanged, this,
+            [](int v) { Settings::values.console_history_size.SetValue(v); });
+    connect(history_seconds, &QSlider::valueChanged, this,
+            [](int v) { Settings::values.console_history_seconds.SetValue(v); });
+    connect(gaps_toggle, &QAbstractButton::toggled, this,
+            [](bool shown) { Settings::values.console_history_gaps.SetValue(shown); });
+    // Only what applies can be changed: the history's options while it shows, all of them
+    // while the overlay does
+    const auto update_history_options = [this, size_row, seconds_row] {
+        const bool history_on = history_toggle->isChecked();
+        history_options->setEnabled(overlay_toggle->isChecked());
+        size_row->setEnabled(history_on);
+        seconds_row->setEnabled(history_on);
+        gaps_toggle->setEnabled(history_on);
+    };
+    connect(overlay_toggle, &QAbstractButton::toggled, this, update_history_options);
+    connect(history_toggle, &QAbstractButton::toggled, this, update_history_options);
+    update_history_options();
     hints_toggle = add_switch(tr("Controller Hints"),
                               tr("Names a controller in the bottom-left corner for a moment "
                                  "when it joins as a player or leaves."));
@@ -449,16 +664,54 @@ ConfigurePlayerAssignment::ConfigurePlayerAssignment(QWidget* parent) : QWidget(
     connect(hints_toggle, &QAbstractButton::toggled, this,
             [](bool shown) { Settings::values.console_hints.SetValue(shown); });
     layout->addWidget(display);
+
+    // Logging for bug reports
+    auto* debug = new QGroupBox(tr("Troubleshooting"), this);
+    debug_box = debug;
+    auto* debug_layout = new QVBoxLayout(debug);
+    probes_toggle = add_switch_to(debug_layout, tr("Debug Probes"),
+                                  tr("Writes detailed controller traces to the log several times "
+                                     "a second, for bug reports. Connected controllers are "
+                                     "always described in the log."));
+    original_probes = Settings::values.console_debug_probes.GetValue();
+    probes_toggle->setChecked(original_probes);
+    connect(probes_toggle, &QAbstractButton::toggled, this,
+            [](bool on) { Settings::values.console_debug_probes.SetValue(on); });
+    layout->addWidget(debug);
+
+    // A short word on the two automatic modes, last on the page
+    auto* about = new QGroupBox(tr("How It Works"), this);
+    about_box = about;
+    auto* about_layout = new QVBoxLayout(about);
+    const auto add_about = [about, about_layout](const QString& title, const QString& text) {
+        auto* title_label = new QLabel(title, about);
+        QFont font = title_label->font();
+        font.setBold(true);
+        title_label->setFont(font);
+        auto* text_label = new QLabel(text, about);
+        text_label->setWordWrap(true);
+        text_label->setObjectName(QStringLiteral("note"));
+        about_layout->addWidget(title_label);
+        about_layout->addWidget(text_label);
+    };
+    add_about(tr("Modern Console"),
+              tr("Controllers are assigned like on the console: each one that connects becomes "
+                 "the next player, with nothing to set up. Players keep their own controls when "
+                 "they swap, and a profile picked for a player is used again next time."));
+    add_about(tr("Handheld Console"),
+              tr("For a handheld PC with built-in controls. The same as Modern Console, but the "
+                 "built-in controls always come last: connect a controller and it becomes "
+                 "Player 1, so a docked handheld plays like a console."));
+    layout->addWidget(about);
     layout->addStretch(1);
 
     // The mode applies at once, so the players switch while the dialog is open; closing it
     // without applying puts the previous mode back (see the destructor)
     original_mode = static_cast<int>(Settings::values.controller_applet_mode.GetValue());
-    connect(handler_group, &QButtonGroup::idClicked, this, [this] {
-        // Picking any handler leaves the hidden Legacy Applet
-        legacy_applet = false;
-        OnModeChanged();
-    });
+    connect(handler_group, &QButtonGroup::idClicked, this,
+            &ConfigurePlayerAssignment::OnModeChanged);
+    connect(manual_group, &QButtonGroup::idClicked, this,
+            &ConfigurePlayerAssignment::OnModeChanged);
     connect(handheld_switch, &QAbstractButton::clicked, this,
             &ConfigurePlayerAssignment::OnModeChanged);
     connect(builtin_picker, &QComboBox::currentIndexChanged, this,
@@ -481,21 +734,23 @@ ConfigurePlayerAssignment::~ConfigurePlayerAssignment() {
             static_cast<Settings::AppletMode>(original_mode));
         Settings::values.console_debug_overlay.SetValue(original_overlay);
         Settings::values.console_hints.SetValue(original_hints);
+        Settings::values.console_history.SetValue(original_history);
+        Settings::values.console_history_size.SetValue(original_history_size);
+        Settings::values.console_history_seconds.SetValue(original_history_seconds);
+        Settings::values.console_history_gaps.SetValue(original_history_gaps);
+        Settings::values.console_debug_probes.SetValue(original_probes);
     }
 }
 
 void ConfigurePlayerAssignment::LoadConfiguration() {
     const auto current = Settings::values.controller_applet_mode.GetValue();
-    // Legacy Applet has no button for now: it shows as Manual and stays until another pick
-    legacy_applet = current == Settings::AppletMode::HLE;
-    int handler = HandlerManual;
-    if (current == Settings::AppletMode::ConsoleMode ||
-        current == Settings::AppletMode::HandheldConsoleMode) {
-        handler = HandlerModern;
-    } else if (current == Settings::AppletMode::LLE) {
-        handler = HandlerReal;
-    }
-    handler_group->button(handler)->setChecked(true);
+    const bool modern = IsAutomatic(current);
+    handler_group->button(modern ? HandlerModern : HandlerManual)->setChecked(true);
+    // Under Manual the applet as set; the default there is Custom Frontend
+    QAbstractButton* applet = manual_group->button(static_cast<int>(current));
+    (applet && !modern ? applet
+                       : manual_group->button(static_cast<int>(Settings::AppletMode::HLE)))
+        ->setChecked(true);
     handheld_switch->setChecked(current == Settings::AppletMode::HandheldConsoleMode);
     UpdateModeUi();
 }
@@ -506,11 +761,8 @@ int ConfigurePlayerAssignment::SelectedMode() const {
         return static_cast<int>(handheld_switch->isChecked()
                                     ? Settings::AppletMode::HandheldConsoleMode
                                     : Settings::AppletMode::ConsoleMode);
-    case HandlerReal:
-        return static_cast<int>(Settings::AppletMode::LLE);
     default:
-        return static_cast<int>(legacy_applet ? Settings::AppletMode::HLE
-                                              : Settings::AppletMode::Disabled);
+        return manual_group->checkedId();
     }
 }
 
@@ -529,6 +781,7 @@ void ConfigurePlayerAssignment::ApplyConfiguration() {
 void ConfigurePlayerAssignment::UpdateModeUi() {
     const auto selected = static_cast<Settings::AppletMode>(SelectedMode());
     handheld_panel->setVisible(handler_group->checkedId() == HandlerModern);
+    manual_panel->setVisible(handler_group->checkedId() == HandlerManual);
     // Only the automatic modes have live players to show
     const bool automatic = IsAutomatic(selected);
     switch (selected) {
@@ -556,6 +809,8 @@ void ConfigurePlayerAssignment::UpdateModeUi() {
     }
     now_box->setVisible(automatic);
     display_box->setVisible(automatic);
+    about_box->setVisible(automatic);
+    debug_box->setVisible(automatic);
     builtin_row->setVisible(selected == Settings::AppletMode::HandheldConsoleMode);
     Refresh();
 }
@@ -658,6 +913,31 @@ void ConfigurePlayerAssignment::RefreshBuiltin() {
                          ? tr("Takes no player while external controllers are connected.")
                          : tr("Not currently connected.")));
     }
+
+    // The picker shows the handheld's controller, with the ✕ inside it to remove it
+    const bool shown = engine_active && !detected_name.empty();
+    const QString first = shown && want_index == 0
+                              ? tr("%1 (auto-detected)").arg(QString::fromStdString(detected_name))
+                              : tr("Auto-detect");
+    if (builtin_picker->itemText(0) != first) {
+        builtin_picker->setItemText(0, first);
+    }
+    builtin_remove->setVisible(shown);
+    builtin_status->setVisible(true);
+    // A removed controller, kept from auto-detect
+    std::string blocked_name;
+    {
+        std::scoped_lock lock{state.mutex};
+        blocked_name = state.handheld_blocked_name;
+    }
+    const bool blocked = !Settings::values.builtin_pad_blocked.GetValue().empty();
+    blocked_row->setVisible(blocked);
+    if (blocked) {
+        blocked_label->setText(
+            tr("Auto-detect is off for %1: it will not be picked as the handheld's controller.")
+                .arg(blocked_name.empty() ? tr("the removed controller")
+                                          : QString::fromStdString(blocked_name)));
+    }
 }
 
 void ConfigurePlayerAssignment::RefreshPlayers() {
@@ -708,13 +988,16 @@ void ConfigurePlayerAssignment::RefreshPlayers() {
         signature += QString::number(entry.player) + QLatin1Char(':') +
                      QString::fromStdString(entry.name) + QLatin1Char('/') +
                      QString::fromStdString(entry.profile) +
-                     (entry.leaving ? QStringLiteral("x") : QString{}) + QLatin1Char('|');
+                     (entry.leaving ? QStringLiteral("x") : QString{}) +
+                     QString::number(entry.turn_off) + QLatin1Char('|');
     }
     if (!handheld_has_player) {
         signature += QStringLiteral("h:") + QString::fromStdString(handheld_name);
     }
     if (signature != players_signature) {
         players_signature = signature;
+        const bool any_turn_off = std::any_of(players.begin(), players.end(),
+                                              [](const auto& e) { return e.turn_off != 0; });
         for (QFrame* row : player_rows) {
             players_list->removeWidget(row);
             row->hide();
@@ -747,6 +1030,42 @@ void ConfigurePlayerAssignment::RefreshPlayers() {
             line->addWidget(badge);
             line->addWidget(new QLabel(QString::fromStdString(entry.name), row), 1);
             const bool live = !entry.leaving;
+
+            // The profile the player's controller carries; picking one puts it on it, and
+            // "No profile" (or the ✕ inside) takes it off: the mappings from before come back
+            auto* profile = new QComboBox(row);
+            auto* clear = AddClearButton(profile);
+            profile->addItem(tr("No profile"));
+            profile->addItems(profiles);
+            // (Not found is -1: "No profile")
+            profile->setCurrentIndex(
+                static_cast<int>(profiles.indexOf(QString::fromStdString(entry.profile)) + 1));
+            profile->setToolTip(tr("Mapping profile for P%1's controller").arg(player + 1));
+            // One width for every row, whatever the profile's name
+            profile->setFixedWidth(170);
+            profile->setEnabled(live && (!profiles.isEmpty() || !entry.profile.empty()));
+            const auto take_off = [player] {
+                auto& console = Common::GetControllerConsoleState();
+                std::scoped_lock lock{console.mutex};
+                console.profile_requests.push_back({player, {}, true});
+            };
+            connect(profile, qOverload<int>(&QComboBox::activated), this,
+                    [player, profile, take_off](int index) {
+                        if (index == 0) {
+                            take_off();
+                            return;
+                        }
+                        auto& console = Common::GetControllerConsoleState();
+                        std::scoped_lock lock{console.mutex};
+                        console.profile_requests.push_back(
+                            {player, profile->itemText(index).toStdString()});
+                    });
+            clear->setToolTip(tr("Take the profile off P%1").arg(player + 1));
+            // (A profile renamed or deleted elsewhere shows as none: no ✕ for it)
+            clear->setVisible(
+                live && profiles.contains(QString::fromStdString(entry.profile)));
+            connect(clear, &QToolButton::clicked, this, take_off);
+            line->addWidget(profile);
 
             auto* up = new QToolButton(row);
             up->setArrowType(Qt::UpArrow);
@@ -800,43 +1119,42 @@ void ConfigurePlayerAssignment::RefreshPlayers() {
             });
             line->addWidget(settings);
 
-            // The profile the player's controller carries; picking one puts it on it, and
-            // "No profile" takes it off (the controller's mappings from before come back)
-            auto* profile = new QComboBox(row);
-            profile->addItem(tr("No profile"));
-            profile->addItems(profiles);
-            // (Not found is -1: "No profile")
-            profile->setCurrentIndex(
-                static_cast<int>(profiles.indexOf(QString::fromStdString(entry.profile)) + 1));
-            profile->setToolTip(tr("Mapping profile for P%1's controller").arg(player + 1));
-            profile->setEnabled(live && (!profiles.isEmpty() || !entry.profile.empty()));
-            connect(profile, qOverload<int>(&QComboBox::activated), this,
-                    [player, profile](int index) {
-                        auto& console = Common::GetControllerConsoleState();
-                        std::scoped_lock lock{console.mutex};
-                        if (index == 0) {
-                            console.profile_requests.push_back({player, {}, true});
-                        } else {
-                            console.profile_requests.push_back(
-                                {player, profile->itemText(index).toStdString()});
-                        }
-                    });
-            line->addWidget(profile);
-            // The quick way to take the profile off (as "No profile")
-            auto* remove = new QToolButton(row);
-            remove->setText(QStringLiteral("\u2715"));
-            remove->setAutoRaise(true);
-            remove->setToolTip(tr("Remove the profile from P%1").arg(player + 1));
-            remove->setFixedWidth(remove->sizeHint().height());
-            remove->setVisible(!entry.profile.empty());
-            remove->setEnabled(live);
-            connect(remove, &QToolButton::clicked, this, [player] {
-                auto& console = Common::GetControllerConsoleState();
-                std::scoped_lock lock{console.mutex};
-                console.profile_requests.push_back({player, {}, true});
-            });
-            line->addWidget(remove);
-
+            // Turn Off, for a Bluetooth controller: red, apart from the rest. Eden disconnects
+            // it, which turns most controllers off; turned on again, it joins as a new player.
+            // (Kept as room on the other rows while one has it, so the buttons stay in line.)
+            if (any_turn_off) {
+                line->addSpacing(6);
+                auto* turn_off = new QToolButton(row);
+                turn_off->setText(tr("Turn Off"));
+                turn_off->setIcon(PowerIcon());
+                turn_off->setIconSize(QSize(14, 14));
+                turn_off->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+                turn_off->setCursor(Qt::PointingHandCursor);
+                turn_off->setStyleSheet(Themed(QStringLiteral(
+                    "QToolButton { border: 1px solid #c83c3c; border-radius: 6px; "
+                    "padding: 3px 10px; background: #c83c3c; color: white; font-weight: bold; }"
+                    "QToolButton:hover { background: #a82c2c; border-color: #a82c2c; }"
+                    "QToolButton:disabled { background: transparent; border-color: palette(mid); "
+                    "color: palette(mid); }")));
+                turn_off->setToolTip(
+                    entry.turn_off == 2
+                        ? tr("Turns off P%1's controller and frees the player. Turn the "
+                             "controller on to join again.")
+                              .arg(player + 1)
+                        : tr("Press a button on this controller first, so Eden can tell it "
+                             "from the others like it."));
+                turn_off->setEnabled(live && entry.turn_off == 2);
+                QSizePolicy keep = turn_off->sizePolicy();
+                keep.setRetainSizeWhenHidden(true);
+                turn_off->setSizePolicy(keep);
+                turn_off->setVisible(entry.turn_off != 0);
+                connect(turn_off, &QToolButton::clicked, this, [player] {
+                    auto& console = Common::GetControllerConsoleState();
+                    std::scoped_lock lock{console.mutex};
+                    console.remove_requests.push_back(player);
+                });
+                line->addWidget(turn_off);
+            }
 
             players_list->addWidget(row);
             player_rows.push_back(row);
@@ -913,6 +1231,8 @@ void ConfigurePlayerAssignment::RefreshPlayers() {
 }
 
 void ConfigurePlayerAssignment::OnBuiltinPicked(int index) {
+    // Picking is the user's say: a removed controller is no longer kept from auto-detect
+    Settings::values.builtin_pad_blocked.SetValue(std::string{});
     const QString ident = builtin_picker->itemData(index).toString();
     if (ident.isEmpty()) {
         // Detect automatically: forget the stored pad, so the engine detects it afresh
@@ -933,6 +1253,7 @@ void ConfigurePlayerAssignment::OnBuiltinPicked(int index) {
 }
 
 void ConfigurePlayerAssignment::OnIdentifyPressed() {
+    Settings::values.builtin_pad_blocked.SetValue(std::string{});
     auto& state = Common::GetControllerConsoleState();
     std::scoped_lock lock{state.mutex};
     state.identify_armed = true;

@@ -32,6 +32,9 @@ struct ControllerConsoleState {
         int flash;    ///< 0 none, 1 green (a controller took the player), 2 red (one left)
         long long flash_since; ///< ms since epoch; the flash blinks for 1.5 seconds from here
         std::string profile;   ///< the input profile the player's controller carries ("" none)
+        /// Its Bluetooth controller can be turned off: 0 no (not Bluetooth), 1 not yet (several
+        /// of its model, until a button press tells them apart), 2 yes
+        int turn_off = 0;
     };
     /// True while an automatic assignment mode runs (the engine owns the players)
     bool engine_active = false;
@@ -40,9 +43,16 @@ struct ControllerConsoleState {
     /// The handheld's own pad: its name ("" when not identified) and whether it holds a player
     std::string handheld_name;
     bool handheld_has_player = false;
+    /// The Controllers tab asked to remove the handheld's controller (its ✕)
+    bool builtin_remove_request = false;
+    /// The removed controller auto-detect leaves alone, by name ("" when not connected)
+    std::string handheld_blocked_name;
     /// Swaps requested by the Players tab, as (player a, player b); the engine applies them
     /// on its next tick, for this session only (the saved controller setup is untouched)
     std::vector<std::pair<int, int>> swap_requests;
+    /// Players whose Bluetooth controller is to be turned off (disconnected): it sits out until
+    /// it reconnects, and the player is free for the next controller to connect
+    std::vector<int> remove_requests;
     /// Players whose controller the Controllers tab asked to rumble (a click on its row)
     std::vector<int> rumble_requests;
     /// An input profile picked for a player: the engine puts the profile's mappings on the set

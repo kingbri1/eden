@@ -1004,6 +1004,26 @@ void ConfigureInputPlayer::SetConnectionLocked(bool locked) {
                          ConfigurePlayerAssignment::ModernComboStyle()
                    : QString{});
         if (!locked) {
+            // The manual modes get the tab exactly as it was: Home back at the right, the
+            // buttons back in their boxes as laid out
+            if (home_centred) {
+                home_centred = false;
+                ui->miscButtons->setStretch(0, 0);
+                delete ui->miscButtons->takeAt(ui->miscButtons->count() - 1);
+            }
+            if (shoulders_raised) {
+                shoulders_raised = false;
+                for (QPushButton* button : {ui->buttonL, ui->buttonR, ui->buttonMinus,
+                                            ui->buttonPlus}) {
+                    if (auto* box = qobject_cast<QBoxLayout*>(
+                            button->parentWidget() ? button->parentWidget()->layout() : nullptr)) {
+                        delete box->takeAt(box->count() - 1);
+                    }
+                }
+            }
+            if (QLayout* connect = ui->groupConnectedController->layout()) {
+                connect->setAlignment(ui->comboControllerType, Qt::Alignment{});
+            }
             // Back to the inherited fonts
             for (QGroupBox* box : bolded_boxes) {
                 if (box) {
@@ -1051,12 +1071,24 @@ void ConfigureInputPlayer::SetConnectionLocked(bool locked) {
                 ui->miscButtons->setStretch(0, 1);
                 ui->miscButtons->addStretch(1);
             }
-            // L, R, Minus and Plus line up with ZL and ZR, whose buttons sit at the top (their
-            // trigger slider is below)
-            for (QPushButton* button : {ui->buttonL, ui->buttonR, ui->buttonMinus,
-                                        ui->buttonPlus}) {
-                if (QWidget* box = button->parentWidget(); box && box->layout()) {
-                    box->layout()->setAlignment(button, Qt::AlignTop | Qt::AlignHCenter);
+            // Connect Controller's drop-down sits at the top of its box, level with the Mapping
+            // Profile card's (which has its status line below)
+            if (QLayout* connect = ui->groupConnectedController->layout()) {
+                connect->setAlignment(ui->comboControllerType, Qt::AlignTop);
+            }
+            // L, R, Minus and Plus line up with ZL and ZR: under the button, a fixed space the
+            // size of ZL's trigger slider (and its spacing), so all six boxes hold the same
+            if (!shoulders_raised) {
+                shoulders_raised = true;
+                const int slider = ui->sliderZLThreshold->sizeHint().height();
+                for (QPushButton* button : {ui->buttonL, ui->buttonR, ui->buttonMinus,
+                                            ui->buttonPlus}) {
+                    if (auto* box = qobject_cast<QBoxLayout*>(
+                            button->parentWidget() ? button->parentWidget()->layout() : nullptr)) {
+                        box->addSpacerItem(new QSpacerItem(0, slider + box->spacing(),
+                                                           QSizePolicy::Minimum,
+                                                           QSizePolicy::Fixed));
+                    }
                 }
             }
         }
@@ -1150,55 +1182,50 @@ QBoxLayout* LayoutHolding(QLayout* layout, QWidget* widget) {
 void ConfigureInputPlayer::BuildProfileCard() {
     profile_card = new QGroupBox(tr("Mapping Profile"), this);
     auto* column = new QVBoxLayout(profile_card);
+    // Connect Controller's margins, so the two drop-downs are level
+    if (const QLayout* connect = ui->groupConnectedController->layout()) {
+        column->setContentsMargins(connect->contentsMargins());
+    }
     auto* row = new QHBoxLayout;
     card_profiles = new QComboBox(profile_card);
     card_profiles->setPlaceholderText(tr("No profile"));
     ConfigurePlayerAssignment::ModernizeCombos(profile_card);
+    // Fills the row up to its buttons, which end at the card's edge
     card_profiles->setMinimumWidth(160);
     card_profiles->setToolTip(tr("Picking a profile applies it to this player at once."));
     card_save = new QPushButton(tr("Save"), profile_card);
     card_save->setDefault(false);
     card_save->setAutoDefault(false);
-    card_more = new QToolButton(profile_card);
-    card_more->setText(QStringLiteral("\u22ef"));
-    card_more->setToolTip(tr("More profile actions"));
-    card_more->setPopupMode(QToolButton::InstantPopup);
-    // A plain button the size of Save, without the arrow a menu button gets
-    card_more->setStyleSheet(QStringLiteral("QToolButton::menu-indicator { image: none; }"));
-    card_more->setMinimumSize(card_save->sizeHint().height(), card_save->sizeHint().height());
+    // The profile's actions, all in view beside Save (Defaults, below the drawing, resets)
+    const auto action = [this](const QString& text, const QString& tip) {
+        auto* button = new QPushButton(text, profile_card);
+        button->setAutoDefault(false);
+        button->setToolTip(tip);
+        return button;
+    };
+    card_save_new = action(tr("Save as New"), tr("Keep this mapping as a new profile"));
+    card_rename = action(tr("Rename"), tr("Rename the selected profile"));
+    card_duplicate = action(tr("Duplicate"), tr("Copy the selected profile under a new name"));
+    card_delete = action(tr("Delete"), tr("Delete the selected profile; this player keeps its "
+                                          "current mapping"));
     // Takes the profile off this player: its mappings from before the profile come back
-    card_remove = new QToolButton(profile_card);
-    card_remove->setText(QStringLiteral("\u2715"));
+    // (Inside the drop-down)
+    card_remove = ConfigurePlayerAssignment::AddClearButton(card_profiles);
     card_remove->setToolTip(tr("Remove the profile from this player"));
-    card_remove->setMinimumSize(card_save->sizeHint().height(), card_save->sizeHint().height());
     row->addWidget(card_profiles, 1);
-    row->addWidget(card_remove);
     row->addWidget(card_save);
-    row->addWidget(card_more);
+    row->addWidget(card_save_new);
+    row->addWidget(card_rename);
+    row->addWidget(card_duplicate);
+    row->addWidget(card_delete);
     column->addLayout(row);
     card_status = new QLabel(profile_card);
     card_status->setWordWrap(true);
     column->addWidget(card_status);
+    // No taller than its rows: the drawing below gets the height
+    profile_card->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Maximum);
 
-    auto* menu = new QMenu(card_more);
-    auto* save_new = menu->addAction(tr("Save as new..."));
-    auto* rename = menu->addAction(tr("Rename..."));
-    auto* duplicate = menu->addAction(tr("Duplicate"));
-    menu->addSeparator();
-    auto* reset = menu->addAction(tr("Reset to default mapping"));
-    auto* remove = menu->addAction(tr("Delete"));
-    card_more->setMenu(menu);
-    connect(menu, &QMenu::aboutToShow, this, [this, rename, duplicate, reset, remove] {
-        const bool selected = ui->comboProfiles->currentIndex() >= 0;
-        rename->setEnabled(selected);
-        duplicate->setEnabled(selected);
-        remove->setEnabled(selected);
-        remove->setText(selected ? tr("Delete \u201c%1\u201d").arg(ui->comboProfiles->currentText())
-                                 : tr("Delete"));
-        // The defaults are the controller's own: there is none to take them from on "Any"
-        reset->setEnabled(ui->comboDevices->currentIndex() != 0);
-    });
-    connect(save_new, &QAction::triggered, this, [this] {
+    connect(card_save_new, &QPushButton::clicked, this, [this] {
         const int count = ui->comboProfiles->count();
         CreateProfile();
         if (ui->comboProfiles->count() > count) {
@@ -1207,13 +1234,9 @@ void ConfigureInputPlayer::BuildProfileCard() {
         RememberProfileMapping();
         UpdateProfileCard();
     });
-    connect(rename, &QAction::triggered, this, &ConfigureInputPlayer::RenameProfile);
-    connect(duplicate, &QAction::triggered, this, &ConfigureInputPlayer::DuplicateProfile);
-    connect(reset, &QAction::triggered, this, [this] {
-        RestoreDefaults();
-        UpdateProfileCard();
-    });
-    connect(remove, &QAction::triggered, this, &ConfigureInputPlayer::DeleteProfileAsked);
+    connect(card_rename, &QPushButton::clicked, this, &ConfigureInputPlayer::RenameProfile);
+    connect(card_duplicate, &QPushButton::clicked, this, &ConfigureInputPlayer::DuplicateProfile);
+    connect(card_delete, &QPushButton::clicked, this, &ConfigureInputPlayer::DeleteProfileAsked);
 
     // The engine owns the mappings here: picking or saving a profile goes through it, or its
     // next pass would put the player's previous mappings back
@@ -1297,15 +1320,19 @@ void ConfigureInputPlayer::UpdateProfileCard() {
     }
 
     const QString follows = tr("Applies to this player's controller, whichever one it is.");
-    card_remove->setVisible(ui->comboProfiles->currentIndex() >= 0);
+    const bool selected = ui->comboProfiles->currentIndex() >= 0;
+    card_remove->setVisible(selected);
+    card_rename->setEnabled(selected);
+    card_duplicate->setEnabled(selected);
+    card_delete->setEnabled(selected);
     if (ui->comboProfiles->currentIndex() < 0) {
-        card_save->setText(tr("Save..."));
-        card_save->setToolTip(tr("Keep this mapping as a new profile"));
-        card_status->setText(tr("No profile selected. %1").arg(follows));
+        card_save->setToolTip(tr("Keep this mapping as a new profile (asks for its name)"));
+        // In Modern Console a remap lasts the session; a profile is what keeps controls
+        card_status->setText(tr("No profile: this player uses its usual controls. Changes made "
+                                "here last for this session; Save as New keeps them."));
         card_status->setPalette(palette());
         return;
     }
-    card_save->setText(tr("Save"));
     card_save->setToolTip(tr("Save this mapping to \u201c%1\u201d").arg(name));
     QPalette status = palette();
     if (CurrentMappingKey() != card_profile_key) {

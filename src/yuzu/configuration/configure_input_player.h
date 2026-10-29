@@ -191,6 +191,7 @@ private:
     bool connection_locked{};
     bool style_applied{};
     bool home_centred{};
+    bool shoulders_raised{};
     /// The section boxes given a bold title in the automatic modes
     std::vector<QPointer<QGroupBox>> bolded_boxes;
 
@@ -209,7 +210,10 @@ private:
     QComboBox* card_profiles{};
     QPushButton* card_save{};
     QToolButton* card_remove{};
-    QToolButton* card_more{};
+    QPushButton* card_save_new{};
+    QPushButton* card_rename{};
+    QPushButton* card_duplicate{};
+    QPushButton* card_delete{};
     QLabel* card_status{};
     QTimer* card_timer{};
     std::string card_profile_key;

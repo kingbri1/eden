@@ -8,9 +8,11 @@
 #include <cctype>
 #include <cstdio>
 #include <cstdlib>
+#include <filesystem>
 #include <fstream>
 #include <iterator>
 #include <numbers>
+#include <set>
 #include <sstream>
 #include <string>
 #include "common/logging.h"
@@ -567,8 +569,10 @@ void SDLDriver::InitJoystick(SDL_JoystickID joystick_id) {
 
     if (joystick_it != joystick_guid_list.end()) {
         const int port = static_cast<int>(joystick_it - joystick_guid_list.begin());
-        LOG_INFO(Input, "input: attach guid={} port={} name={} (reusing a freed slot)",
-                 guid.RawString(), port, SDL_GetJoystickName(sdl_joystick));
+        if (Settings::values.console_debug_probes.GetValue()) {
+            LOG_INFO(Input, "input: attach guid={} port={} name={} (reusing a freed slot)",
+                     guid.RawString(), port, SDL_GetJoystickName(sdl_joystick));
+        }
         (*joystick_it)->SetSDLJoystick(sdl_joystick, sdl_gamecontroller);
         (*joystick_it)->EnableMotion();
         SetBattery((*joystick_it)->GetPadIdentifier(),
@@ -597,8 +601,10 @@ void SDLDriver::CloseJoystick(SDL_Joystick* sdl_joystick) {
                                           });
 
     if (joystick_it != joystick_guid_list.end()) {
-        LOG_INFO(Input, "input: detach guid={} port={}", guid.RawString(),
-                 static_cast<int>(joystick_it - joystick_guid_list.begin()));
+        if (Settings::values.console_debug_probes.GetValue()) {
+            LOG_INFO(Input, "input: detach guid={} port={}", guid.RawString(),
+                     static_cast<int>(joystick_it - joystick_guid_list.begin()));
+        }
         (*joystick_it)->SetSDLJoystick(nullptr, nullptr);
     }
 }
@@ -701,6 +707,87 @@ bool IsMotionController(unsigned vendor, unsigned product) {
 
 /// Under Steam, takes the motion controllers off Steam's hide list, so SDL also opens the real
 /// devices (for their motion) next to Steam's sensorless virtual pads
+/// The controllers Steam Input hid and Eden opened again for their motion (vendor << 16 |
+/// product): motion sources for the automatic modes only, never offered as input devices, so
+/// the device lists stay as Steam leaves them
+std::set<u32>& UnhiddenControllers() {
+    static std::set<u32> unhidden;
+    return unhidden;
+}
+
+/// Logs the system's motion sensors and HID devices once, for adding handhelds and their gyros
+/// from users' logs: a handheld's built-in gyro is usually a sensor of the system (IIO), not of
+/// its gamepad, so SDL never sees it. Read-only.
+void LogMotionHardware() {
+#ifdef __linux__
+    // (Debug Probes)
+    if (!Settings::values.console_debug_probes.GetValue()) {
+        return;
+    }
+    namespace fs = std::filesystem;
+    const auto read_line = [](const fs::path& path) {
+        std::ifstream file{path};
+        std::string line;
+        std::getline(file, line);
+        return line;
+    };
+    std::error_code error;
+    std::string sensors;
+    // (Iterated without exceptions: a device can come or go while it is read)
+    for (fs::directory_iterator it{"/sys/bus/iio/devices", error}, end; !error && it != end;
+         it.increment(error)) {
+        const fs::path dir = it->path();
+        std::error_code ignored;
+        const bool gyro = fs::exists(dir / "in_anglvel_x_raw", ignored);
+        const bool accel = fs::exists(dir / "in_accel_x_raw", ignored);
+        if (!gyro && !accel) {
+            continue;
+        }
+        std::string mount = read_line(dir / "in_anglvel_mount_matrix");
+        if (mount.empty()) {
+            mount = read_line(dir / "in_accel_mount_matrix");
+        }
+        const fs::path device = fs::canonical(dir / "device", ignored);
+        sensors += fmt::format("\n  {} name={} gyro={} accel={} mount=[{}] at={}",
+                               dir.filename().string(), read_line(dir / "name"), gyro, accel,
+                               mount, ignored ? std::string{"?"} : device.string());
+    }
+    LOG_INFO(Input, "Motion sensors of the system (IIO):{}",
+             sensors.empty() ? std::string{" none"} : sensors);
+
+    std::string hid;
+    error.clear();
+    for (fs::directory_iterator it{"/sys/class/hidraw", error}, end; !error && it != end;
+         it.increment(error)) {
+        const auto& entry = *it;
+        std::ifstream uevent{entry.path() / "device" / "uevent"};
+        std::string line;
+        std::string id;
+        std::string name;
+        while (std::getline(uevent, line)) {
+            if (line.starts_with("HID_ID=")) {
+                // bus:vendor:product, each zero-padded to 8 hex digits
+                unsigned bus = 0, vendor = 0, product = 0;
+                if (std::sscanf(line.c_str() + 7, "%x:%x:%x", &bus, &vendor, &product) == 3) {
+                    id = fmt::format("{:04x}:{:04x} bus={}", vendor, product, bus);
+                }
+            } else if (line.starts_with("HID_NAME=")) {
+                name = line.substr(9);
+            }
+        }
+        hid += fmt::format("\n  {} {} name={}", entry.path().filename().string(), id, name);
+    }
+    LOG_INFO(Input, "HID devices:{}", hid.empty() ? std::string{" none"} : hid);
+#endif
+}
+
+/// A controller Eden opened again under Steam Input for its motion alone
+bool IsUnhiddenController(SDL_Joystick* joystick) {
+    const u32 id = static_cast<u32>(SDL_GetJoystickVendor(joystick)) << 16 |
+                   SDL_GetJoystickProduct(joystick);
+    return UnhiddenControllers().contains(id);
+}
+
 void UnhideMotionControllers() {
     if (!std::getenv("SteamGameId") && !std::getenv("SteamAppId")) {
         return;
@@ -726,6 +813,7 @@ void UnhideMotionControllers() {
         if (std::sscanf(entry.c_str(), "%x/%x", &vendor, &product) == 2 &&
             IsMotionController(vendor, product)) {
             dropped += entry + ',';
+            UnhiddenControllers().insert(vendor << 16 | product);
             continue;
         }
         kept += entry + ',';
@@ -733,8 +821,10 @@ void UnhideMotionControllers() {
     if (!kept.empty()) {
         kept.pop_back();
     }
-    LOG_INFO(Input, "Steam Input: opening motion controllers for their sensors: {}",
-             dropped.empty() ? std::string{"none hidden"} : dropped);
+    if (Settings::values.console_debug_probes.GetValue()) {
+        LOG_INFO(Input, "Steam Input: opening motion controllers for their sensors: {}",
+                 dropped.empty() ? std::string{"none hidden"} : dropped);
+    }
     SDL_SetHintWithPriority(SDL_HINT_GAMECONTROLLER_IGNORE_DEVICES, kept.c_str(),
                             SDL_HINT_OVERRIDE);
     SDL_SetHintWithPriority(SDL_HINT_JOYSTICK_HIDAPI_STEAMDECK, "1", SDL_HINT_OVERRIDE);
@@ -760,6 +850,7 @@ SDLDriver::SDLDriver(std::string input_engine_) : InputEngine(std::move(input_en
     // SDL3 defaults Steam Controller Bluetooth HIDAPI support to off, which can disable gyro.
     SDL_SetHint(SDL_HINT_JOYSTICK_HIDAPI_STEAM, "1");
     UnhideMotionControllers();
+    LogMotionHardware();
     SDL_SetHint(SDL_HINT_GAMECONTROLLER_SENSOR_FUSION, "1");
     SDL_SetHint(SDL_HINT_AUTO_UPDATE_SENSORS, "1");
 
@@ -837,6 +928,9 @@ std::vector<Common::ParamPackage> SDLDriver::GetInputDevices() const {
             const SDL_GUID sdl_guid = SDL_GetJoystickGUID(joystick->GetSDLJoystick());
             const bool steam_virtual = sdl_guid.data[4] == 0xDE && sdl_guid.data[5] == 0x28 &&
                                        sdl_guid.data[8] == 0xFF && sdl_guid.data[9] == 0x11;
+            if (!steam_virtual && IsUnhiddenController(joystick->GetSDLJoystick())) {
+                continue;
+            }
             const std::string name =
                 fmt::format("{} {}{}", joystick->GetControllerName(), joystick->GetPort(),
                             steam_virtual ? " (Steam)" : "");
@@ -855,7 +949,8 @@ std::vector<Common::ParamPackage> SDLDriver::GetInputDevices() const {
     // Add dual controllers
     for (const auto& [key, value] : joystick_map) {
         for (const auto& joystick : value) {
-            if (joystick->IsJoyconRight()) {
+            if (joystick->IsJoyconRight() && joystick->GetSDLJoystick() &&
+                !IsUnhiddenController(joystick->GetSDLJoystick())) {
                 if (!joycon_pairs.contains(joystick->GetPort())) {
                     continue;
                 }

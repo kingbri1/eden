@@ -6,6 +6,7 @@
 
 #include <map>
 #include <memory>
+#include <optional>
 #include <thread>
 
 #include "common/settings.h"
@@ -46,6 +47,8 @@
 #include <QEvent>
 #include <QMouseEvent>
 #include <QToolButton>
+#include <QIcon>
+#include <QPixmap>
 #include "yuzu/configuration/configure_input_player.h"
 #include "yuzu/configuration/configure_motion_touch.h"
 #include "yuzu/configuration/configure_ringcon.h"
@@ -242,24 +245,29 @@ void ConfigureInput::Initialize(InputCommon::InputSubsystem* input_subsystem,
         if (mirror_console_mode) {
             mirror_console_mode();
         }
+        // Several players: the tabs drag and carry arrows; one alone has nothing to reorder
+        const bool several = std::count_if(rows.begin(), rows.end(),
+                                           [](const auto& r) { return !r.leaving; }) > 1;
         for (std::size_t i = 0; i < player_tabs.size(); ++i) {
             const auto row = std::find_if(rows.begin(), rows.end(), [i](const auto& r) {
                 return r.player == static_cast<int>(i);
             });
             bool shown = true;
-            QColor label;
+            const QColor label; // the tab's own text colour: the bubbles colour themselves
+            tab_lit[i] = 0;
             if (automatic) {
                 shown = engine_active && row != rows.end();
-                // Red (leaving) wins, then blue (input held), then the green connect blink
+                // As the menu bar's chips light: red when the controller left, then input held,
+                // then the green blink when a controller takes the player
                 const long long elapsed = shown ? now - row->flash_since : 0;
                 const bool blink = shown && row->flash != 0 && elapsed < flash_ms &&
                                    (elapsed / 125) % 2 == 0;
                 if (blink && row->flash == 2) {
-                    label = QColor(200, 50, 50);
+                    tab_lit[i] = 3;
                 } else if (shown && row->active && !row->leaving) {
-                    label = QColor(50, 110, 220);
+                    tab_lit[i] = 1;
                 } else if (blink) {
-                    label = QColor(40, 160, 70);
+                    tab_lit[i] = 2;
                 }
             }
             if (tabs && !tab_dragging) {
@@ -289,8 +297,10 @@ void ConfigureInput::Initialize(InputCommon::InputSubsystem* input_subsystem,
                         set_text(player_tab_titles[i]);
                         set_tip({});
                     } else if (shown) {
-                        // The grip says the tab drags, like the Controllers tab's rows
-                        set_text(QStringLiteral("\u283F P%1").arg(i + 1));
+                        // The grip says the tab drags, like the Controllers tab's rows (alone,
+                        // there is nothing to reorder)
+                        set_text(several ? QStringLiteral("\u283F P%1").arg(i + 1)
+                                         : QStringLiteral("P%1").arg(i + 1));
                         set_tip(tr("P%1: %2\nDrag left or right to change the player order")
                                     .arg(i + 1)
                                     .arg(QString::fromStdString(row->name)));
@@ -303,7 +313,7 @@ void ConfigureInput::Initialize(InputCommon::InputSubsystem* input_subsystem,
         // selected tab reads bold
         if (tabs) {
             const bool controls_page = tabs->indexOf(player_tabs[0]) >= 0;
-            tabs_editable = automatic && engine_active && controls_page;
+            tabs_editable = automatic && engine_active && controls_page && several;
             // Under the dark themes Qt's drag would show the theme's tab: Eden drags it instead
             tabs->setMovable(tabs_editable && !UISettings::IsDarkTheme());
             // Pill tabs in the players' colours, the selected one filled (the tab bar is the
@@ -361,10 +371,13 @@ void ConfigureInput::Initialize(InputCommon::InputSubsystem* input_subsystem,
             for (std::size_t i = 0; i < player_tabs.size(); ++i) {
                 if (const int index = tabs->indexOf(player_tabs[i]); index >= 0) {
                     const QVariant tab_data =
-                        pills ? QVariant(ConfigurePlayerAssignment::PlayerColor(static_cast<int>(i)))
+                        pills ? QVariant(QVariantList{
+                                    ConfigurePlayerAssignment::PlayerColor(static_cast<int>(i)),
+                                    tab_lit[i]})
                               : QVariant{};
                     if (bar->tabData(index) != tab_data) {
                         bar->setTabData(index, tab_data);
+                        bar->update(); // (lit or not: the bubble repaints)
                     }
                 }
             }
@@ -497,6 +510,71 @@ void ConfigureInput::PropagatePlayerNumberChanged(size_t player_index, bool chec
     }
 }
 
+namespace {
+
+/// A player tab's colour and how it is lit (0 idle, 1 input held, 2 green blink, 3 red blink),
+/// as its data carries them; nothing for the other tabs
+struct PlayerTabLook {
+    QColor accent;
+    int lit = 0;
+};
+
+std::optional<PlayerTabLook> TabLook(const QVariant& data) {
+    if (data.metaType() != QMetaType::fromType<QVariantList>()) {
+        return std::nullopt;
+    }
+    const QVariantList list = data.toList();
+    if (list.size() != 2) {
+        return std::nullopt;
+    }
+    return PlayerTabLook{list[0].value<QColor>(), list[1].toInt()};
+}
+
+/// Like the menu bar's chips: an outline in the player's colour, filled while its controller
+/// has an input held; the selected tab the other way round. Blinks fill green or red.
+struct TabPaint {
+    bool filled;
+    QColor fill;
+    QColor ink;
+};
+
+/// A chevron drawn as an icon, so it sits centred in its button (a text character sits on the
+/// font's baseline); dimmed when the button is disabled
+QIcon ChevronIcon(const QColor& ink, bool left, qreal ratio) {
+    const auto draw = [&](int alpha) {
+        QPixmap pixmap(QSize(14, 14) * ratio);
+        pixmap.setDevicePixelRatio(ratio);
+        pixmap.fill(Qt::transparent);
+        QPainter painter{&pixmap};
+        painter.setRenderHint(QPainter::Antialiasing);
+        QColor color = ink;
+        color.setAlpha(alpha);
+        painter.setPen(QPen(color, 2.2, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        const qreal tip = left ? 4.5 : 9.5;
+        const qreal back = left ? 9.0 : 5.0;
+        const QPointF chevron[3] = {QPointF(back, 2.5), QPointF(tip, 7), QPointF(back, 11.5)};
+        painter.drawPolyline(chevron, 3);
+        return pixmap;
+    };
+    QIcon icon;
+    icon.addPixmap(draw(255), QIcon::Normal);
+    icon.addPixmap(draw(80), QIcon::Disabled);
+    return icon;
+}
+
+TabPaint PaintFor(const PlayerTabLook& look, bool selected) {
+    if (look.lit == 3) {
+        return {true, QColor(200, 50, 50), QColor(Qt::white)};
+    }
+    if (look.lit == 2) {
+        return {true, QColor(45, 160, 80), QColor(Qt::white)};
+    }
+    const bool filled = selected != (look.lit == 1);
+    return {filled, look.accent, filled ? QColor(Qt::white) : look.accent};
+}
+
+} // Anonymous namespace
+
 PlayerTabStyle::PlayerTabStyle(const QString& base) : QProxyStyle(base) {}
 
 void PlayerTabStyle::drawControl(ControlElement element, const QStyleOption* option,
@@ -516,43 +594,37 @@ void PlayerTabStyle::drawControl(ControlElement element, const QStyleOption* opt
         }
     }
     // Only a player tab is a bubble, in its player's colour; the others stay as they were
-    const QVariant data = index >= 0 ? bar->tabData(index) : QVariant{};
-    if (data.metaType() != QMetaType::fromType<QColor>()) {
+    const auto look = index >= 0 ? TabLook(bar->tabData(index)) : std::nullopt;
+    if (!look) {
         QProxyStyle::drawControl(element, option, painter, widget);
         return;
     }
-    const QColor accent = data.value<QColor>();
     const bool selected = tab->state & State_Selected;
+    const TabPaint paint = PaintFor(*look, selected);
     if (element == CE_TabBarTabShape) {
         painter->save();
         painter->setRenderHint(QPainter::Antialiasing);
         const QRectF pill = QRectF(tab->rect).adjusted(2, 3, -2, -3);
-        if (selected) {
+        if (paint.filled) {
             painter->setPen(Qt::NoPen);
-            painter->setBrush(accent);
+            painter->setBrush(paint.fill);
         } else {
-            QColor edge = accent;
-            edge.setAlpha(170);
-            painter->setPen(QPen(edge, 1.5));
-            QColor fill = accent;
-            fill.setAlpha(tab->state & State_MouseOver ? 45 : 0);
-            painter->setBrush(fill);
+            painter->setPen(QPen(look->accent, 1.5));
+            QColor hover = look->accent;
+            hover.setAlpha(tab->state & State_MouseOver ? 45 : 0);
+            painter->setBrush(hover);
         }
         painter->drawRoundedRect(pill, pill.height() / 2, pill.height() / 2);
         painter->restore();
         return;
     }
-    // The label: white and bold on the filled tab, else in the player's colour, which reads on
-    // a light tab bar and a dark one (Windows in dark mode keeps light tabs with white text);
-    // a flash colour wins
+    // The label: bold, white on a filled tab, else in the player's colour
     QStyleOptionTab label{*tab};
-    const QColor flash = bar->tabTextColor(index);
-    const QColor text = selected ? QColor(Qt::white) : (flash.isValid() ? flash : accent);
-    label.palette.setColor(QPalette::WindowText, text);
-    label.palette.setColor(QPalette::ButtonText, text);
+    label.palette.setColor(QPalette::WindowText, paint.ink);
+    label.palette.setColor(QPalette::ButtonText, paint.ink);
     painter->save();
     QFont font = painter->font();
-    font.setBold(selected);
+    font.setBold(true);
     painter->setFont(font);
     QProxyStyle::drawControl(element, &label, painter, widget);
     painter->restore();
@@ -588,22 +660,20 @@ void PlayerTabOverlay::paintEvent(QPaintEvent*) {
     painter.setRenderHint(QPainter::Antialiasing);
     const int hovered = bar->underMouse() ? bar->tabAt(bar->mapFromGlobal(QCursor::pos())) : -1;
     const auto bubble = [&](int i, QRect tab, bool around_arrows) {
-        const QColor accent = bar->tabData(i).value<QColor>();
-        const bool selected = i == bar->currentIndex();
+        const auto look = TabLook(bar->tabData(i));
+        const TabPaint paint = PaintFor(*look, i == bar->currentIndex());
         const QRectF pill = QRectF(tab).adjusted(2, 3, -2, -3);
-        if (selected) {
+        if (paint.filled) {
             painter.setPen(Qt::NoPen);
-            painter.setBrush(accent);
+            painter.setBrush(paint.fill);
         } else {
-            QColor edge = accent;
-            edge.setAlpha(170);
-            painter.setPen(QPen(edge, 1.5));
-            QColor fill = accent;
-            fill.setAlpha(i == hovered ? 45 : 0);
-            painter.setBrush(fill);
+            painter.setPen(QPen(look->accent, 1.5));
+            QColor hover = look->accent;
+            hover.setAlpha(i == hovered ? 45 : 0);
+            painter.setBrush(hover);
         }
         painter.drawRoundedRect(pill, pill.height() / 2, pill.height() / 2);
-        // The label, between the tab's arrows; a flash colours it as on the tabs it covers
+        // The label, between the tab's arrows
         QRect text = tab;
         if (around_arrows) {
             if (const QWidget* left = bar->tabButton(i, QTabBar::LeftSide)) {
@@ -614,16 +684,14 @@ void PlayerTabOverlay::paintEvent(QPaintEvent*) {
             }
         }
         QFont font = bar->font();
-        font.setBold(selected);
+        font.setBold(true);
         painter.setFont(font);
-        const QColor flash = bar->tabTextColor(i);
-        painter.setPen(selected ? QColor(Qt::white)
-                                : (flash.isValid() ? flash : QColor(0xEF, 0xF0, 0xF1)));
+        painter.setPen(paint.ink);
         painter.drawText(text, Qt::AlignCenter, bar->tabText(i));
     };
     for (int i = 0; i < bar->count(); ++i) {
-        const QVariant tab_data = bar->tabData(i);
-        if (tab_data.metaType() != QMetaType::fromType<QColor>() || !bar->isTabVisible(i)) {
+        const auto look = TabLook(bar->tabData(i));
+        if (!look || !bar->isTabVisible(i)) {
             continue;
         }
         const QRect tab = bar->tabRect(i);
@@ -631,7 +699,7 @@ void PlayerTabOverlay::paintEvent(QPaintEvent*) {
         painter.fillRect(tab, background);
         if (i == drag_index) {
             // Where the dragged tab came from: an empty slot
-            QColor edge = tab_data.value<QColor>();
+            QColor edge = look->accent;
             edge.setAlpha(90);
             painter.setPen(QPen(edge, 1, Qt::DashLine));
             painter.setBrush(Qt::NoBrush);
@@ -759,10 +827,11 @@ bool ConfigureInput::DragPlayerTab(QEvent* event) {
     };
     if (type == QEvent::MouseButtonPress) {
         const int index = bar->tabAt(at);
-        own_drag_index = mouse->button() == Qt::LeftButton && index >= 0 &&
-                                 bar->tabData(index).metaType() == QMetaType::fromType<QColor>()
-                             ? index
-                             : -1;
+        // (Player tabs carry their look: colour and lit state)
+        own_drag_index =
+            mouse->button() == Qt::LeftButton && index >= 0 && TabLook(bar->tabData(index))
+                ? index
+                : -1;
         own_drag_press_x = at.x();
         own_dragging = false;
         return false; // the tab bar still selects the tab
@@ -849,12 +918,15 @@ void ConfigureInput::UpdateTabArrows() {
         if (!left || !right) {
             const auto make = [this, player](Qt::ArrowType arrow, int step) {
                 auto* button = new QToolButton;
-                button->setArrowType(arrow);
+                // A chevron icon in the tab's ink (set below): the dark themes' arrow images are
+                // large solid triangles
+                button->setProperty("left", arrow == Qt::LeftArrow);
+                button->setIconSize(QSize(14, 14));
                 button->setAutoRaise(true);
-                button->setFixedSize(16, 16);
+                button->setFixedSize(20, 20);
                 // The size a style sheet reports is the size the tab makes room for (the dark
                 // themes say 12 pixels, and the tab text went under the buttons)
-                button->setStyleSheet(QStringLiteral("QToolButton { width: 16px; height: 16px; "
+                button->setStyleSheet(QStringLiteral("QToolButton { width: 20px; height: 20px; "
                                                      "padding: 0px; border: none; "
                                                      "background: transparent; }"));
                 connect(button, &QToolButton::clicked, this, [this, player, step] {
@@ -869,11 +941,34 @@ void ConfigureInput::UpdateTabArrows() {
             tabs->tabBar()->setTabButton(index, QTabBar::LeftSide, left);
             tabs->tabBar()->setTabButton(index, QTabBar::RightSide, right);
         }
+        // Above the dark themes' bubble layer, which would hide them (and shown, but mid-drag)
+        if (!own_dragging) {
+            left->show();
+            right->show();
+        }
+        left->raise();
+        right->raise();
+        // In the tab's ink, like the chips' arrows: white on a filled tab, else its colour
+        if (const auto look = TabLook(tabs->tabBar()->tabData(index))) {
+            const TabPaint paint = PaintFor(*look, index == tabs->currentIndex());
+            for (QToolButton* button : {left.data(), right.data()}) {
+                if (button->property("ink").value<QColor>() != paint.ink) {
+                    button->setProperty("ink", paint.ink);
+                    button->setIcon(ChevronIcon(paint.ink, button->property("left").toBool(),
+                                                button->devicePixelRatioF()));
+                }
+            }
+        }
         left->setEnabled(player > 0);
         left->setToolTip(tr("Swap with P%1").arg(player));
         right->setEnabled(player < last_player);
         right->setToolTip(tr("Swap with P%1").arg(player + 2));
     }
+}
+
+QWidget* ConfigureInput::PlayerTab(int player) const {
+    return player >= 0 && player < static_cast<int>(player_tabs.size()) ? player_tabs[player]
+                                                                          : nullptr;
 }
 
 QList<QWidget*> ConfigureInput::GetSubTabs() const {
