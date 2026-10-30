@@ -105,7 +105,11 @@ void ValveMotion::Scan(std::stop_token stop) {
                     std::sscanf(line.c_str() + 7, "%x:%x:%x", &bus, &vendor, &product);
                 }
             }
-            if (vendor != VendorValve || Family(static_cast<u16>(product)) == FamilyNone) {
+            // The Steam Deck and the Steam Controller (2026); the original Steam Controller was
+            // never tried (its report layout stays below for when it can be tested)
+            const int family = Family(static_cast<u16>(product));
+            if (vendor != VendorValve ||
+                (family != FamilyDeck && family != FamilyController26)) {
                 continue;
             }
             const std::string path = "/dev/" + entry.path().filename().string();
@@ -136,6 +140,7 @@ void ValveMotion::Read(std::stop_token stop, std::string path, std::size_t port,
     const PadIdentifier identifier{.guid = Common::UUID{}, .port = port, .pad = 0};
     bool known = false;
     int silent = 0;
+    int samples_logged = 0;
     auto last_sample = std::chrono::steady_clock::time_point{};
     auto last_request = std::chrono::steady_clock::time_point{};
     std::array<u8, 128> report{};
@@ -197,6 +202,15 @@ void ValveMotion::Read(std::stop_token stop, std::string path, std::size_t port,
         motion.accel_y = -ReadS16(data, accel + 2) * accel_scale;
         motion.accel_z = -ReadS16(data, accel + 4) * accel_scale;
         const bool zero = motion.accel_x == 0 && motion.accel_y == 0 && motion.accel_z == 0;
+        const bool gyro_zero = motion.gyro_x == 0 && motion.gyro_y == 0 && motion.gyro_z == 0;
+        if (Common::ControllerProbes() && samples_logged < 3) {
+            ++samples_logged;
+            LOG_INFO(Input,
+                     "Valve controller port {} report {:#04x} ({} bytes): accel {} {} {} gyro {} {} {}",
+                     port, data[0], size, ReadS16(data, accel), ReadS16(data, accel + 2),
+                     ReadS16(data, accel + 4), ReadS16(data, gyro), ReadS16(data, gyro + 2),
+                     ReadS16(data, gyro + 4));
+        }
 
         const auto now = std::chrono::steady_clock::now();
         {
@@ -206,13 +220,14 @@ void ValveMotion::Read(std::stop_token stop, std::string path, std::size_t port,
             device.path = path;
             device.product = product;
             device.button_held = held;
-            device.moving = !zero;
+            device.moving = !zero && !gyro_zero;
             device.seen = now;
         }
 
         // Silent (Steam keeps the sensors off unless its layout uses the gyro): ask for them,
-        // motion setting only, at most every 2 seconds
-        silent = zero ? silent + 1 : 0;
+        // motion setting only, at most every 2 seconds. A live gyro is never exactly still, and
+        // a controller may keep its accelerometer on with the gyro off.
+        silent = (zero || gyro_zero) ? silent + 1 : 0;
         if (silent >= 50 && now - last_request > std::chrono::seconds{2}) {
             last_request = now;
             if (const int control = ::open(path.c_str(), O_RDWR | O_CLOEXEC); control >= 0) {
