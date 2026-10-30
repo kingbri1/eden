@@ -595,6 +595,9 @@ private:
     /// Each Bluetooth controller's starting player, by address: kept through Turn Off and
     /// reconnects
     std::map<std::string, int> address_origin;
+    /// Names given to controllers, by controller (see the rows): "bt:<address>", "handheld",
+    /// or "id:<identity>" for the session
+    std::map<std::string, std::string> controller_names;
     /// The mode last logged (a change is logged), and each player's refused controller type
     /// as last logged
     std::optional<Settings::AppletMode> logged_mode;
@@ -611,6 +614,12 @@ private:
     std::map<std::string, std::string> pad_bluetooth;
     std::set<std::string> pad_bt_pending;
     void LearnBluetoothPads();
+    /// Experimental reader: Steam's pads (by BluetoothKey) paired with the Valve controllers
+    /// read directly, by port, when identical ones need a button press to tell apart
+    std::map<std::string, std::size_t> valve_pairs;
+    /// Each player's Valve controller port as last logged (port + 1, 0 none)
+    std::array<std::size_t, 10> logged_valve_port{};
+    void LearnValvePairs();
     /// connection instance -> stable identity (serial, else model GUID), for matching a
     /// returning pad that comes back under a new instance
     std::map<u32, std::string> pad_identity;
@@ -679,7 +688,8 @@ private:
     bool overlay_dragging = false;
     QPoint overlay_press;
     /// The row under the mouse, which shows its buttons (-1: none), and those buttons as drawn:
-    /// a swap with the player above (-1) or below (1), or remove (0)
+    /// a swap with the player above (-1) or below (1), Turn Off (0), Config (2), rename (3), and
+    /// while a name is typed apply (4), remove the name (5) or cancel (6)
     int overlay_hover_player = -1;
     bool overlay_button_down = false;
     struct OverlayButton {
@@ -690,6 +700,11 @@ private:
     };
     std::vector<OverlayButton> overlay_buttons;
     bool HandleOverlayMouse(QEvent* event);
+    /// Each player's given name as last shown ("" none), and the name being typed in the overlay
+    /// (its pencil): the player (-1 none) and the text so far
+    std::array<std::string, 10> overlay_custom_name{};
+    int overlay_edit_player = -1;
+    QString overlay_edit_text;
     /// The player whose tab the next settings dialog opens on (-1: as usual)
     int open_player_tab = -1;
     /// Under gamescope, makes a window fill the screen (see the definition)

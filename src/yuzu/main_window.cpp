@@ -82,10 +82,16 @@
 #include <QCheckBox>
 #include <QClipboard>
 #include <QDesktopServices>
+#include <QDialog>
+#include <QDialogButtonBox>
 #include <QDir>
 #include <QFile>
 #include <QFileDialog>
 #include <QFileInfo>
+#include <QLineEdit>
+#include <QPushButton>
+#include <QUrl>
+#include <QVBoxLayout>
 #ifdef __linux__
 #include <QDBusConnection>
 #include <QDBusMessage>
@@ -95,6 +101,7 @@
 #include <linux/hidraw.h>
 #include <linux/input.h>
 #include <sys/ioctl.h>
+#include <time.h>
 #include <unistd.h>
 #endif
 #include <QGuiApplication>
@@ -183,6 +190,7 @@ static FileSys::VirtualFile VfsDirectoryCreateFileWrapper(const FileSys::Virtual
 // Input //
 #include "hid_core/frontend/emulated_controller.h"
 #include "hid_core/hid_core.h"
+#include "input_common/drivers/valve_motion.h"
 #include "input_common/drivers/virtual_amiibo.h"
 
 // Video Core //
@@ -2133,9 +2141,16 @@ PadBluetooth FindPadBluetooth(SDL_JoystickID id) {
     return {{}, any_bluetooth};
 }
 
-/// True while a controller has a button held, read from its input nodes (kept open)
+/// True while a controller has a button held, or had one pressed in the last 200ms (a quick
+/// tap falls between two checks), read from its input nodes (kept open)
 bool RealButtonHeld(const RealController& controller) {
     static std::map<QString, int> open_nodes;
+    // (When each node's last press happened, by the kernel's own stamp on it: a press read late
+    // is still as old as it is)
+    static std::map<QString, s64> pressed_at_us;
+    timespec real{};
+    clock_gettime(CLOCK_REALTIME, &real);
+    const s64 now_us = static_cast<s64>(real.tv_sec) * 1'000'000 + real.tv_nsec / 1000;
     for (const QString& event : controller.events) {
         auto it = open_nodes.find(event);
         if (it == open_nodes.end()) {
@@ -2146,9 +2161,20 @@ bool RealButtonHeld(const RealController& controller) {
         if (it->second < 0) {
             continue;
         }
-        // (Its queue is not read otherwise: drained so the kernel keeps nothing for it)
-        std::array<char, 1024> drain;
-        while (::read(it->second, drain.data(), drain.size()) > 0) {
+        // Its queue: the presses since the last check (and drained, so the kernel keeps nothing)
+        std::array<input_event, 64> events;
+        ssize_t got = 0;
+        while ((got = ::read(it->second, events.data(), sizeof(events))) > 0) {
+            for (std::size_t k = 0; k < static_cast<std::size_t>(got) / sizeof(input_event); ++k) {
+                if (events[k].type == EV_KEY && events[k].value == 1) {
+                    pressed_at_us[event] = static_cast<s64>(events[k].input_event_sec) * 1'000'000 +
+                                           static_cast<s64>(events[k].input_event_usec);
+                }
+            }
+        }
+        if (const auto pressed = pressed_at_us.find(event);
+            pressed != pressed_at_us.end() && now_us - pressed->second < 200'000) {
+            return true;
         }
         std::array<unsigned char, KEY_MAX / 8 + 1> keys{};
         if (ioctl(it->second, EVIOCGKEY(keys.size()), keys.data()) < 0) {
@@ -2361,6 +2387,70 @@ bool StyleSupported(Core::HID::NpadStyleIndex style, const Core::HID::NpadStyleT
     }
 }
 
+/// A controller's short name, for a named player ("John (Xbox)")
+QString ShortControllerName(SDL_JoystickID id, const QString& full) {
+    const Uint16 vendor = SDL_GetJoystickVendorForID(id);
+    const Uint16 product = SDL_GetJoystickProductForID(id);
+    if (vendor == 0x28DE && product == 0x1205) {
+        return QStringLiteral("Steam Deck");
+    }
+    if (vendor == 0x28DE && InputCommon::ValveMotion::Family(product) != 0) {
+        return QStringLiteral("Steam Controller");
+    }
+    switch (SDL_GetGamepadTypeForID(id)) {
+    case SDL_GAMEPAD_TYPE_XBOX360:
+    case SDL_GAMEPAD_TYPE_XBOXONE:
+        return QStringLiteral("Xbox");
+    case SDL_GAMEPAD_TYPE_PS3:
+        return QStringLiteral("DualShock 3");
+    case SDL_GAMEPAD_TYPE_PS4:
+        return QStringLiteral("DualShock 4");
+    case SDL_GAMEPAD_TYPE_PS5:
+        return QStringLiteral("DualSense");
+    case SDL_GAMEPAD_TYPE_NINTENDO_SWITCH_PRO:
+        return QStringLiteral("Pro Controller");
+    case SDL_GAMEPAD_TYPE_NINTENDO_SWITCH_JOYCON_LEFT:
+    case SDL_GAMEPAD_TYPE_NINTENDO_SWITCH_JOYCON_RIGHT:
+    case SDL_GAMEPAD_TYPE_NINTENDO_SWITCH_JOYCON_PAIR:
+        return QStringLiteral("Joy-Con");
+    case SDL_GAMEPAD_TYPE_GAMECUBE:
+        return QStringLiteral("GameCube");
+    default:
+        return full;
+    }
+}
+
+/// The kept names (console_controller_names): key=name entries, ';' and '=' and '%' escaped
+std::map<std::string, std::string> ReadControllerNames() {
+    std::map<std::string, std::string> names;
+    const QString stored =
+        QString::fromStdString(Settings::values.console_controller_names.GetValue());
+    for (const QString& entry : stored.split(QLatin1Char(';'), Qt::SkipEmptyParts)) {
+        const auto at = entry.indexOf(QLatin1Char('='));
+        if (at > 0) {
+            names[QUrl::fromPercentEncoding(entry.left(at).toUtf8()).toStdString()] =
+                QUrl::fromPercentEncoding(entry.mid(at + 1).toUtf8()).toStdString();
+        }
+    }
+    return names;
+}
+
+void WriteControllerNames(const std::map<std::string, std::string>& names) {
+    QStringList entries;
+    for (const auto& [key, name] : names) {
+        // (Only what lasts: Bluetooth controllers and the handheld's own)
+        if (!key.starts_with("bt:") && key != "handheld") {
+            continue;
+        }
+        entries.push_back(
+            QString::fromLatin1(QUrl::toPercentEncoding(QString::fromStdString(key))) +
+            QLatin1Char('=') +
+            QString::fromLatin1(QUrl::toPercentEncoding(QString::fromStdString(name))));
+    }
+    Settings::values.console_controller_names.SetValue(
+        entries.join(QLatin1Char(';')).toStdString());
+}
+
 /// A pad's USB product id, under the same lock as the rest of the API use.
 Uint16 PadProduct(SDL_JoystickID id) {
     const JoystickApiLock lock;
@@ -2518,6 +2608,15 @@ void PadRumble(SDL_JoystickID id, Uint16 strength, Uint32 duration_ms) {
 }
 
 /// An SDL motion binding for a device, as InputCommon's own auto-mapping builds it.
+/// The motion of a Valve controller read directly (experimental reader), as a binding
+std::string ValveMotionParam(std::size_t port) {
+    Common::ParamPackage param;
+    param.Set("engine", "valvemotion");
+    param.Set("motion", 0);
+    param.Set("port", static_cast<int>(port));
+    return param.Serialize();
+}
+
 std::string SdlMotionParam(const std::string& guid, int port) {
     Common::ParamPackage param;
     param.Set("engine", "sdl");
@@ -3235,6 +3334,10 @@ void MainWindow::RenderControllerOverlay() {
     for (const auto& row : overlay_rows) {
         name_w = (std::max)(name_w, name_fm.horizontalAdvance(overlay_row_name[row.player]));
     }
+    // (A name being typed has room for its 16 characters)
+    if (overlay_edit_player >= 0) {
+        name_w = (std::max)(name_w, name_fm.horizontalAdvance(QString(16, QLatin1Char('M'))));
+    }
     const int controller_w = inner + badge_w + 8 + name_w + inner + 4;
     // Room for as many of the widest chips as the history keeps (and the times between them),
     // so the image keeps its size as the bubbles change; without the history, room for a
@@ -3299,9 +3402,80 @@ void MainWindow::RenderControllerOverlay() {
             painter.setPen(Qt::NoPen);
         }
         painter.setFont(name_font);
+        if (row.player == overlay_edit_player && !gone) {
+            // The name being typed: a field with its caret (blinking), or what to type
+            const QRectF field(1 + inner + badge_w + 4, at_y + 4, name_w + 10, row_h - 8);
+            painter.setPen(QPen(QColor(120, 170, 255, 230), 1.2));
+            painter.setBrush(QColor(255, 255, 255, 30));
+            painter.drawRoundedRect(field, 5, 5);
+            const QRectF text_rect = field.adjusted(5, 0, -5, 0);
+            painter.setPen(overlay_edit_text.isEmpty() ? QColor(255, 255, 255, 110)
+                                                       : QColor(245, 245, 245));
+            painter.drawText(text_rect, Qt::AlignVCenter | Qt::AlignLeft,
+                             overlay_edit_text.isEmpty() ? tr("Name") : overlay_edit_text);
+            if ((QDateTime::currentMSecsSinceEpoch() / 500) % 2 == 0) {
+                const double caret = text_rect.left() +
+                                     (overlay_edit_text.isEmpty()
+                                          ? 0
+                                          : name_fm.horizontalAdvance(overlay_edit_text)) +
+                                     1;
+                painter.setPen(QPen(Qt::white, 1.2));
+                painter.drawLine(QPointF(caret, field.top() + 4), QPointF(caret, field.bottom() - 4));
+            }
+            painter.setPen(Qt::NoPen);
+            return;
+        }
         painter.setPen(gone ? QColor(255, 255, 255, 120) : QColor(240, 240, 240));
         painter.drawText(QRect(1 + inner + badge_w + 8, at_y, name_w + 4, row_h),
                          Qt::AlignVCenter | Qt::AlignLeft, overlay_row_name[row.player]);
+        painter.setPen(Qt::NoPen);
+    };
+    // The buttons of a name being typed, where the history goes: apply, remove the name (when
+    // it has one) and cancel
+    const auto edit_buttons = [&](std::size_t r, int at_y) {
+        const auto& row = overlay_rows[r];
+        constexpr int round_w = 24;
+        const bool named = !overlay_custom_name[static_cast<std::size_t>(row.player)].empty();
+        const int buttons = named ? 3 : 2;
+        const double x0 = 1 + controller_w + bubble_gap;
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(QColor(14, 14, 18, 200));
+        painter.drawRoundedRect(QRectF(x0, at_y, 8 + buttons * (round_w + chip_gap) - chip_gap,
+                                       row_h),
+                                row_h / 2.0, row_h / 2.0);
+        double x = x0 + 4;
+        const double h = row_h - 6;
+        const auto round = [&](int action, const QColor& fill) {
+            const QRectF rect(x, at_y + 3, round_w, h);
+            overlay_buttons.push_back({rect.toAlignedRect(), row.player, action, -1});
+            x += round_w + chip_gap;
+            painter.setPen(Qt::NoPen);
+            painter.setBrush(fill);
+            painter.drawEllipse(rect.center(), h / 2.0, h / 2.0);
+            painter.setPen(QPen(Qt::white, 1.8, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+            painter.setBrush(Qt::NoBrush);
+            return rect.center();
+        };
+        // Apply: a check
+        {
+            const QPointF c = round(4, QColor(45, 160, 80, 230));
+            const QPointF check[3] = {QPointF(c.x() - 4.5, c.y()), QPointF(c.x() - 1.5, c.y() + 3),
+                                      QPointF(c.x() + 4.5, c.y() - 3.5)};
+            painter.drawPolyline(check, 3);
+        }
+        // Remove the name: a bin
+        if (named) {
+            const QPointF c = round(5, QColor(200, 50, 50, 230));
+            painter.drawLine(QPointF(c.x() - 4.5, c.y() - 3.5), QPointF(c.x() + 4.5, c.y() - 3.5));
+            painter.drawLine(QPointF(c.x() - 1.5, c.y() - 5), QPointF(c.x() + 1.5, c.y() - 5));
+            painter.drawRoundedRect(QRectF(c.x() - 3.5, c.y() - 3.5, 7, 8.5), 1, 1);
+        }
+        // Cancel: a cross
+        {
+            const QPointF c = round(6, QColor(255, 255, 255, 40));
+            painter.drawLine(QPointF(c.x() - 3.5, c.y() - 3.5), QPointF(c.x() + 3.5, c.y() + 3.5));
+            painter.drawLine(QPointF(c.x() + 3.5, c.y() - 3.5), QPointF(c.x() - 3.5, c.y() + 3.5));
+        }
         painter.setPen(Qt::NoPen);
     };
     // The row under the mouse shows its buttons where its history goes: swaps with the players
@@ -3329,7 +3503,7 @@ void MainWindow::RenderControllerOverlay() {
         const int below = neighbour(r, 1);
         const int count_round = (above >= 0 ? 1 : 0) + (below >= 0 ? 1 : 0);
         const double x0 = 1 + controller_w + bubble_gap;
-        const double pill_w = 4 + count_round * (round_w + chip_gap) + config_w +
+        const double pill_w = 4 + (count_round + 1) * (round_w + chip_gap) + config_w +
                               (turns_off ? chip_gap + remove_w : 0) + 4;
         painter.setPen(Qt::NoPen);
         painter.setBrush(QColor(14, 14, 18, 200));
@@ -3361,6 +3535,18 @@ void MainWindow::RenderControllerOverlay() {
         }
         if (below >= 0) {
             arrow(1, below);
+        }
+        // Rename: a pencil, opening a small dialog for the name
+        {
+            const QRectF rect = add(round_w, 3, -1);
+            painter.setPen(Qt::NoPen);
+            painter.setBrush(QColor(255, 255, 255, 40));
+            painter.drawEllipse(rect.center(), h / 2.0, h / 2.0);
+            const QPointF c = rect.center();
+            painter.setPen(QPen(Qt::white, 1.6, Qt::SolidLine, Qt::RoundCap));
+            painter.drawLine(QPointF(c.x() - 4, c.y() + 4), QPointF(c.x() + 3, c.y() - 3));
+            painter.drawLine(QPointF(c.x() + 1.5, c.y() - 4.5), QPointF(c.x() + 4.5, c.y() - 1.5));
+            painter.setPen(Qt::NoPen);
         }
         // Config: the player's tab in the controls settings
         {
@@ -3415,6 +3601,11 @@ void MainWindow::RenderControllerOverlay() {
             drag_y = y;
         } else {
             controller_bubble(row, blink, y);
+        }
+        if (row.player == overlay_edit_player && row.pad != 0) {
+            edit_buttons(r, y);
+            y += row_h + row_gap;
+            continue;
         }
         if (row.player == overlay_hover_player && row.pad != 0 && !overlay_dragging &&
             row_buttons(r, y)) {
@@ -3550,6 +3741,50 @@ void MainWindow::RenderControllerOverlay() {
 
 bool MainWindow::HandleOverlayMouse(QEvent* event) {
     const auto type = event->type();
+    // A name being typed in the overlay takes the keys (and no shortcut fires meanwhile), while
+    // the overlay shows and the player is still there
+    if (overlay_edit_player >= 0) {
+        bool shown_now = false;
+        {
+            auto& frame = Common::GetControllerOverlayFrame();
+            std::scoped_lock lock{frame.mutex};
+            shown_now = frame.enabled;
+        }
+        const bool still_there =
+            std::any_of(overlay_rows.begin(), overlay_rows.end(), [this](const auto& row) {
+                return row.player == overlay_edit_player && row.pad != 0;
+            });
+        if (!shown_now || !still_there) {
+            overlay_edit_player = -1;
+        }
+    }
+    if (overlay_edit_player >= 0 &&
+        (type == QEvent::KeyPress || type == QEvent::KeyRelease ||
+         type == QEvent::ShortcutOverride)) {
+        event->accept();
+        if (type != QEvent::KeyPress) {
+            return true;
+        }
+        const auto* key = static_cast<QKeyEvent*>(event);
+        const int player = overlay_edit_player;
+        if (key->key() == Qt::Key_Return || key->key() == Qt::Key_Enter ||
+            key->key() == Qt::Key_Escape) {
+            if (key->key() != Qt::Key_Escape) {
+                auto& state = Common::GetControllerConsoleState();
+                std::scoped_lock lock{state.mutex};
+                state.rename_requests.emplace_back(player,
+                                                   overlay_edit_text.trimmed().toStdString());
+            }
+            overlay_edit_player = -1;
+        } else if (key->key() == Qt::Key_Backspace) {
+            overlay_edit_text.chop(1);
+        } else if (!key->text().isEmpty() && key->text().at(0).isPrint() &&
+                   overlay_edit_text.size() < 16) {
+            overlay_edit_text += key->text();
+        }
+        RenderControllerOverlay();
+        return true;
+    }
     if (type == QEvent::Leave && overlay_hover_player >= 0) {
         overlay_hover_player = -1;
         RenderControllerOverlay();
@@ -3613,7 +3848,24 @@ bool MainWindow::HandleOverlayMouse(QEvent* event) {
             overlay_button_down = true;
             auto& state = Common::GetControllerConsoleState();
             std::scoped_lock lock{state.mutex};
-            if (button->action == 2) {
+            if (button->action == 3) {
+                // Name it in place: typing goes to the field (the window takes the keys)
+                overlay_edit_player = button->player;
+                overlay_edit_text = QString::fromStdString(
+                    overlay_custom_name[static_cast<std::size_t>(button->player)]);
+                render_window->setFocus();
+                QTimer::singleShot(0, this, [this] { RenderControllerOverlay(); });
+            } else if (button->action >= 4 && button->action <= 6) {
+                // Apply (4), remove the name (5), cancel (6)
+                if (button->action != 6) {
+                    state.rename_requests.emplace_back(
+                        button->player, button->action == 4
+                                            ? overlay_edit_text.trimmed().toStdString()
+                                            : std::string{});
+                }
+                overlay_edit_player = -1;
+                QTimer::singleShot(0, this, [this] { RenderControllerOverlay(); });
+            } else if (button->action == 2) {
                 // (After the event: the dialog runs its own loop)
                 const int player = button->player;
                 QTimer::singleShot(0, this, [this, player] {
@@ -3688,7 +3940,7 @@ bool MainWindow::HandleOverlayMouse(QEvent* event) {
 
 bool MainWindow::OverlayAnimating() const {
     const qint64 now_ms = QDateTime::currentMSecsSinceEpoch();
-    if (!controller_hints.empty()) {
+    if (!controller_hints.empty() || overlay_edit_player >= 0) {
         return true;
     }
     const qint64 life_ms = Settings::values.console_history_seconds.GetValue() * 1000LL;
@@ -3715,7 +3967,10 @@ void MainWindow::LearnBluetoothPads() {
         SDL_JoystickID* ids = SDL_GetGamepads(&count);
         for (int i = 0; i < count; ++i) {
             const u32 id = ids[i];
-            if (Common::SteamPadsInUse() && !IsSteamVirtualPad(id)) {
+            // (Not a real device Steam hid: its virtual pad is the player)
+            if (Common::SteamPadsInUse() && !IsSteamVirtualPad(id) &&
+                Common::SteamHidModel(SDL_GetJoystickVendorForID(id),
+                                      SDL_GetJoystickProductForID(id))) {
                 continue;
             }
             std::string key = BluetoothKey(id);
@@ -3747,21 +4002,47 @@ void MainWindow::LearnBluetoothPads() {
             }
             continue;
         }
+        // A pad's button held now, or pressed in the last 200ms (a quick tap)
+        const auto now_steady = std::chrono::steady_clock::now();
         std::vector<std::pair<u32, std::string>> pressed_pads;
         for (const auto& pad : pads) {
-            if (PadAnyButtonPressed(pad.first)) {
+            const auto last =
+                input_subsystem ? input_subsystem->GetSDLLastActivity(pad.first) : std::nullopt;
+            if (PadAnyButtonPressed(pad.first) ||
+                (last && now_steady - *last < std::chrono::milliseconds{200})) {
                 pressed_pads.push_back(pad);
             }
         }
-        if (pressed_pads.size() != 1) {
-            continue;
-        }
+        // (Every check reads the controllers' queues, so a press is only ever counted when it
+        // happened, never later)
         const RealController* pressed = nullptr;
         int count = 0;
         for (const auto& controller : controllers) {
             if (RealButtonHeld(controller)) {
                 pressed = &controller;
                 ++count;
+            }
+        }
+        if (pressed_pads.size() != 1) {
+            continue;
+        }
+        // Debug Probes: why a press didn't tell them apart (at most once a second)
+        if (count != 1 && Common::ControllerProbes()) {
+            static auto last = std::chrono::steady_clock::time_point{};
+            if (const auto now = std::chrono::steady_clock::now();
+                now - last > std::chrono::seconds{1}) {
+                last = now;
+                std::string nodes;
+                for (const auto& controller : controllers) {
+                    nodes += fmt::format(" {}[{}]", controller.address,
+                                         controller.events.empty()
+                                             ? std::string{"no input node"}
+                                             : controller.events.front().toStdString());
+                }
+                LOG_INFO(Frontend,
+                         "console-mode: {} pressed a button, {} of {} controllers of its model "
+                         "show one held:{}",
+                         pressed_pads.front().second, count, controllers.size(), nodes);
             }
         }
         if (count != 1) {
@@ -3783,8 +4064,57 @@ void MainWindow::LearnBluetoothPads() {
 #endif
 }
 
+void MainWindow::LearnValvePairs() {
+    // Identical Valve controllers read directly: the one controller with a button held while
+    // just one of Steam's pads of its model has one held is that pad's
+    const auto devices = input_subsystem
+                             ? input_subsystem->GetValveMotionDevices()
+                             : std::vector<InputCommon::InputSubsystem::ValveMotionDevice>{};
+    if (devices.size() < 2) {
+        return;
+    }
+    std::map<int, std::vector<std::size_t>> held_ports;
+    std::map<int, int> per_family;
+    for (const auto& device : devices) {
+        const int family = InputCommon::ValveMotion::Family(device.product);
+        ++per_family[family];
+        if (device.button_held) {
+            held_ports[family].push_back(device.port);
+        }
+    }
+    std::map<int, std::vector<std::string>> held_pads;
+    {
+        const JoystickApiLock lock;
+        int count = 0;
+        SDL_JoystickID* ids = SDL_GetGamepads(&count);
+        for (int i = 0; i < count; ++i) {
+            const u32 id = ids[i];
+            if (!IsSteamVirtualPad(id) || SDL_GetJoystickVendorForID(id) != 0x28DE) {
+                continue;
+            }
+            const int family = InputCommon::ValveMotion::Family(SDL_GetJoystickProductForID(id));
+            if (family != 0 && per_family[family] > 1 && PadAnyButtonPressed(id)) {
+                held_pads[family].push_back(BluetoothKey(id));
+            }
+        }
+        SDL_free(ids);
+    }
+    for (const auto& [family, keys] : held_pads) {
+        const auto ports = held_ports.find(family);
+        if (keys.size() == 1 && ports != held_ports.end() && ports->second.size() == 1 &&
+            valve_pairs[keys.front()] != ports->second.front()) {
+            valve_pairs[keys.front()] = ports->second.front();
+            if (Common::ControllerProbes()) {
+                LOG_INFO(Frontend, "console-mode: {} paired with Valve port {} by a button press",
+                         keys.front(), ports->second.front());
+            }
+        }
+    }
+}
+
 void MainWindow::PollControllerActivity() {
     LearnBluetoothPads();
+    LearnValvePairs();
     // Input shows faster than the 250ms assignment tick: redraw only when who is active changes
     // (or while the hints and history animate)
     if (overlay_rows.empty()) {
@@ -4005,6 +4335,10 @@ void MainWindow::ApplyConsoleControllerMode() {
         const JoystickApiLock lock;
         int count = 0;
         SDL_JoystickID* ids = SDL_GetGamepads(&count);
+        // Steam's virtual pads around: none when Steam Input is off for Eden, which then works
+        // as launched outside Steam
+        Common::GetControllerConsoleState().steam_pads_present =
+            std::any_of(ids, ids + count, [](SDL_JoystickID id) { return IsSteamVirtualPad(id); });
         for (int i = 0; i < count; ++i) {
             const u32 id = ids[i];
             present.insert(id);
@@ -4014,9 +4348,12 @@ void MainWindow::ApplyConsoleControllerMode() {
             if (Common::GetControllerConsoleState().steam_bypassed && IsSteamVirtualPad(id)) {
                 continue;
             }
-            if (Common::SteamPadsInUse() && !IsSteamVirtualPad(id)) {
-                // A real device next to Steam's virtual pads, unhidden for its motion: never a
-                // player; logged once, with the virtual pads of the same model
+            // A real device next to Steam's virtual pads that Steam hid, opened again for its
+            // motion: never a player; logged once, with the virtual pads of the same model. (A
+            // controller Steam leaves alone plays as itself.)
+            if (Common::SteamPadsInUse() && !IsSteamVirtualPad(id) &&
+                Common::SteamHidModel(SDL_GetJoystickVendorForID(id),
+                                      SDL_GetJoystickProductForID(id))) {
                 motion_devices.push_back(id);
                 // (Only marked once logged: Debug Probes turned on later still describes it)
                 static std::set<u32> probed;
@@ -4042,7 +4379,7 @@ void MainWindow::ApplyConsoleControllerMode() {
                 continue;
             }
             std::string ident = PadIdentity(id);
-            if (Common::SteamPadsInUse()) {
+            if (Common::SteamPadsInUse() && IsSteamVirtualPad(id)) {
                 if (const Uint64 handle = PadSteamHandle(id)) {
                     ident = fmt::format("steamhandle:{:#x}", handle);
                 } else if (now - first_seen[id] < std::chrono::seconds{3}) {
@@ -4300,6 +4637,7 @@ void MainWindow::ApplyConsoleControllerMode() {
         session_sets = *console_profile;
         ApplySeatProfiles();
         LOG_INFO(Frontend, "console-mode: entered, the user's players are kept aside");
+        controller_names = ReadControllerNames();
         if (Common::ControllerProbes()) {
             LOG_INFO(Frontend, "console-mode: entered with profile P1 motions {}",
                      MotionTrace((*console_profile)[0]));
@@ -5193,9 +5531,20 @@ void MainWindow::ApplyConsoleControllerMode() {
             }
             const int slot = it->second;
             const bool is_builtin = builtin_valid && id == builtin_match_id;
+            // The set's key: a Bluetooth controller's address (its bindings and profile follow
+            // it through reconnects, Turn Off and corrected guesses: Steam's handles follow the
+            // connection order), else its identity. A set made before the address was known
+            // moves to it.
+            const auto address = inst_address.find(id);
+            const std::string set_key =
+                address != inst_address.end() ? "bt:" + address->second : ident;
+            if (set_key != ident && !pad_sets.contains(set_key) && pad_sets.contains(ident)) {
+                pad_sets[set_key] = pad_sets[ident];
+                pad_sets.erase(ident);
+            }
             // A controller carries the set it first got for the session: its slot's, unless
             // another controller has that one (after a swap), then the first set nobody has
-            if (!is_builtin && !pad_sets.contains(ident)) {
+            if (!is_builtin && !pad_sets.contains(set_key)) {
                 std::set<int> taken;
                 for (const auto& [other, set] : pad_sets) {
                     taken.insert(set);
@@ -5207,7 +5556,7 @@ void MainWindow::ApplyConsoleControllerMode() {
                 if (taken.contains(set)) {
                     set = slot;
                 }
-                pad_sets[ident] = set;
+                pad_sets[set_key] = set;
                 if (Common::ControllerProbes()) {
                     LOG_INFO(Frontend, "console-mode: inst={} carries the P{} set", id, set + 1);
                 }
@@ -5219,7 +5568,7 @@ void MainWindow::ApplyConsoleControllerMode() {
                     return !b.empty() && Common::ParamPackage{b}.Get("engine", "") == "sdl";
                 });
             };
-            int set_index = is_builtin ? 0 : pad_sets[ident];
+            int set_index = is_builtin ? 0 : pad_sets[set_key];
             if (!is_builtin && !has_sdl(profile[set_index])) {
                 for (int k = set_index - 1; k >= 0; --k) {
                     if (has_sdl(profile[k]) && (k > 0 || !builtin_valid || !handheld)) {
@@ -5272,7 +5621,47 @@ void MainWindow::ApplyConsoleControllerMode() {
             // deck's own controller is unique (28DE:1205); another model pairs when only one
             // of it is connected (the virtual pad reports the real controller's ids).
             u32 motion_source = 0;
-            if (Common::SteamPadsInUse()) {
+            // Experimental: a Valve controller's motion read from its own reports, with no SDL
+            // device (Steam keeps it). The Deck, or the only one of its model, pairs as is;
+            // identical ones pair by a button press (see LearnValvePairs).
+            std::optional<std::size_t> valve_port;
+            const auto valve_devices = input_subsystem->GetValveMotionDevices();
+            if (Common::SteamPadsInUse() && !valve_devices.empty()) {
+                const Uint16 vendor = is_builtin ? 0x28DE : SDL_GetJoystickVendorForID(id);
+                const Uint16 product = is_builtin ? 0x1205 : SDL_GetJoystickProductForID(id);
+                const int family = vendor == 0x28DE ? InputCommon::ValveMotion::Family(product) : 0;
+                std::vector<std::size_t> ports;
+                for (const auto& device : valve_devices) {
+                    if (family != 0 && InputCommon::ValveMotion::Family(device.product) == family) {
+                        ports.push_back(device.port);
+                    }
+                }
+                const auto virtuals = std::count_if(live.begin(), live.end(), [&](const auto& e) {
+                    return SDL_GetJoystickVendorForID(e.first) == 0x28DE &&
+                           InputCommon::ValveMotion::Family(SDL_GetJoystickProductForID(e.first)) ==
+                               family;
+                });
+                const auto paired = valve_pairs.find(BluetoothKey(id));
+                if (ports.size() == 1 && (is_builtin || virtuals == 1)) {
+                    valve_port = ports.front();
+                } else if (paired != valve_pairs.end() &&
+                           std::find(ports.begin(), ports.end(), paired->second) != ports.end()) {
+                    valve_port = paired->second;
+                }
+            }
+            // (Probes: logged when it changes, like the real device's below; port + 1, 0 none)
+            const std::size_t valve_logged = valve_port ? *valve_port + 1 : 0;
+            if (valve_logged != logged_valve_port[slot]) {
+                logged_valve_port[slot] = valve_logged;
+                if (Common::ControllerProbes()) {
+                    LOG_INFO(Frontend, "console-mode: P{} motion from {}", slot + 1,
+                             valve_port ? fmt::format("Valve controller port {}", *valve_port)
+                                        : std::string{"no Valve controller"});
+                }
+            }
+            if (valve_port) {
+                want.motions.fill(ValveMotionParam(*valve_port));
+            } else if (Common::SteamPadsInUse()) {
                 const Uint16 vendor = is_builtin ? 0x28DE : SDL_GetJoystickVendorForID(id);
                 const Uint16 product = is_builtin ? 0x1205 : SDL_GetJoystickProductForID(id);
                 const auto same_model = [vendor, product](u32 other) {
@@ -5298,7 +5687,9 @@ void MainWindow::ApplyConsoleControllerMode() {
                              slot + 1, motion_source);
                 }
             }
-            if (motion_source) {
+            if (valve_port) {
+                // (Set above)
+            } else if (motion_source) {
                 if (const auto source = input_subsystem->GetSDLBinding(motion_source)) {
                     want.motions.fill(SdlMotionParam(source->first, source->second));
                 }
@@ -5431,6 +5822,46 @@ void MainWindow::ApplyConsoleControllerMode() {
         constexpr qint64 flash_ms = 1500;
         const qint64 now_ms = QDateTime::currentMSecsSinceEpoch();
         static const QRegularExpression port_number{QStringLiteral(" \\d+(?=( \\(Steam\\))?$)")};
+        static const QRegularExpression steam_suffix{QStringLiteral(" \\(Steam\\)$")};
+        // A player's controller as named: its own name ("Xbox One Controller", without Steam's
+        // tag), or the name given to it with its short name ("John (Xbox)")
+        const auto name_key = [&](u32 pad) {
+            if (builtin_valid && pad == builtin_match_id) {
+                return std::string{"handheld"};
+            }
+            if (const auto address = inst_address.find(pad); address != inst_address.end()) {
+                return "bt:" + address->second;
+            }
+            return "id:" + live[pad];
+        };
+        // Names given from the Controllers tab: they belong to the controller (its swaps,
+        // reconnects and Turn Off follow it; Bluetooth ones and the handheld's own are kept)
+        {
+            std::vector<std::pair<int, std::string>> renames;
+            {
+                auto& state = Common::GetControllerConsoleState();
+                std::scoped_lock lock{state.mutex};
+                renames.swap(state.rename_requests);
+            }
+            for (const auto& [player, given] : renames) {
+                const auto held =
+                    std::find_if(pad_slots.begin(), pad_slots.end(), [&](const auto& e) {
+                        return e.second == player && live.contains(e.first);
+                    });
+                if (held == pad_slots.end()) {
+                    continue;
+                }
+                const std::string key = name_key(held->first);
+                if (given.empty()) {
+                    controller_names.erase(key);
+                } else {
+                    controller_names[key] = given;
+                }
+                WriteControllerNames(controller_names);
+                LOG_INFO(Frontend, "console-mode: P{} named \"{}\"", player + 1, given);
+            }
+        }
+        std::array<std::string, 10> custom_names{};
         overlay_rows.clear();
         std::vector<Common::ControllerConsoleState::PlayerRow> tab_rows;
         // Flashes follow the controller behind a player, not just the player: in handheld mode
@@ -5453,6 +5884,22 @@ void MainWindow::ApplyConsoleControllerMode() {
                 const auto [display, raw] = label_of(pad, std::string{});
                 QString name = display.isEmpty() ? raw : display;
                 name.remove(port_number);
+                name.remove(steam_suffix);
+                // (A name given before the address was known moves to it, like the bindings)
+                if (const std::string key = name_key(pad); key.starts_with("bt:")) {
+                    const auto earlier = controller_names.find("id:" + live[pad]);
+                    if (earlier != controller_names.end() && !controller_names.contains(key)) {
+                        controller_names[key] = earlier->second;
+                        controller_names.erase(earlier);
+                        WriteControllerNames(controller_names);
+                    }
+                }
+                const auto given = controller_names.find(name_key(pad));
+                if (given != controller_names.end()) {
+                    custom_names[static_cast<std::size_t>(i)] = given->second;
+                    name = QStringLiteral("%1 (%2)").arg(QString::fromStdString(given->second),
+                                                         ShortControllerName(pad, name));
+                }
                 overlay_row_name[i] = name;
                 if (since == 0 || gone != 0) {
                     since = now_ms;
@@ -5512,9 +5959,12 @@ void MainWindow::ApplyConsoleControllerMode() {
             const int turn_off = address != pad_bluetooth.end() && !address->second.empty() ? 2
                                  : pad_bt_pending.contains(key)                             ? 1
                                                                                             : 0;
+            overlay_custom_name[static_cast<std::size_t>(i)] =
+                custom_names[static_cast<std::size_t>(i)];
             tab_rows.push_back({i, overlay_row_name[i].toStdString(), false, gone != 0, flash,
                                 flash_since, ConsoleBindingSets()[slot_set[i]].profile_name,
-                                turn_off, origin, guessed});
+                                turn_off, origin, guessed,
+                                custom_names[static_cast<std::size_t>(i)]});
         }
         {
             std::string handheld_name;

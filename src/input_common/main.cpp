@@ -13,6 +13,7 @@
 #include "input_common/drivers/tas_input.h"
 #include "input_common/drivers/touch_screen.h"
 #include "input_common/drivers/udp_client.h"
+#include "input_common/drivers/valve_motion.h"
 #include "input_common/drivers/virtual_amiibo.h"
 #include "input_common/drivers/virtual_gamepad.h"
 #include "input_common/helpers/stick_from_buttons.h"
@@ -83,6 +84,7 @@ struct InputSubsystem::Impl {
         RegisterEngine("gcpad", gcadapter);
 #endif
         RegisterEngine("cemuhookudp", udp_client);
+        RegisterEngine("valvemotion", valve_motion);
         RegisterEngine("tas", tas_input);
         RegisterEngine("camera", camera);
 #ifdef __ANDROID__
@@ -117,6 +119,7 @@ struct InputSubsystem::Impl {
         UnregisterEngine(gcadapter);
 #endif
         UnregisterEngine(udp_client);
+        UnregisterEngine(valve_motion);
         UnregisterEngine(tas_input);
         UnregisterEngine(camera);
 #ifdef __ANDROID__
@@ -342,6 +345,7 @@ struct InputSubsystem::Impl {
     std::shared_ptr<TouchScreen> touch_screen;
     std::shared_ptr<TasInput::Tas> tas_input;
     std::shared_ptr<CemuhookUDP::UDPClient> udp_client;
+    std::shared_ptr<ValveMotion> valve_motion;
     std::shared_ptr<Camera> camera;
     std::shared_ptr<VirtualAmiibo> virtual_amiibo;
     std::shared_ptr<VirtualGamepad> virtual_gamepad;
@@ -448,6 +452,17 @@ std::optional<std::pair<std::string, int>> InputSubsystem::GetSDLBinding(u32 sdl
 #else
     return std::nullopt;
 #endif
+}
+
+std::vector<InputSubsystem::ValveMotionDevice> InputSubsystem::GetValveMotionDevices() const {
+    std::vector<ValveMotionDevice> out;
+    if (!impl->valve_motion) {
+        return out;
+    }
+    for (const auto& device : impl->valve_motion->GetDevices()) {
+        out.push_back({device.port, device.product, device.button_held, device.moving});
+    }
+    return out;
 }
 
 std::optional<std::chrono::steady_clock::time_point> InputSubsystem::GetSDLLastActivity(

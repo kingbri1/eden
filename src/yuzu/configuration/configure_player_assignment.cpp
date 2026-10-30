@@ -19,11 +19,14 @@
 #include <QDrag>
 #include <QDragEnterEvent>
 #include <QDropEvent>
+#include <QFocusEvent>
 #include <QFrame>
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QIcon>
+#include <QKeyEvent>
 #include <QLabel>
+#include <QLineEdit>
 #include <QMimeData>
 #include <QMouseEvent>
 #include <QPainter>
@@ -42,6 +45,7 @@
 #include "common/controller_console_state.h"
 #include "common/fs/path_util.h"
 #include "common/settings.h"
+#include "input_common/drivers/valve_motion.h"
 #include "qt_common/config/uisettings.h"
 #include "yuzu/configuration/configure_player_assignment.h"
 #include "yuzu/configuration/input_profiles.h"
@@ -137,6 +141,65 @@ QIcon PowerIcon() {
 
 /// One player in the list: a click rumbles its controller, and a long press (or a drag) picks
 /// it up to drop on another player, which swaps the two
+/// The edit field of a player's name: Enter applies and Esc cancels without reaching the
+/// dialog (whose default button Enter would press)
+class PlayerNameEdit : public QLineEdit {
+public:
+    using QLineEdit::QLineEdit;
+
+    std::function<void()> on_apply;
+    std::function<void()> on_cancel;
+
+protected:
+    void keyPressEvent(QKeyEvent* event) override {
+        if (event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter) {
+            event->accept();
+            if (on_apply) {
+                on_apply();
+            }
+            return;
+        }
+        if (event->key() == Qt::Key_Escape) {
+            event->accept();
+            if (on_cancel) {
+                on_cancel();
+            }
+            return;
+        }
+        QLineEdit::keyPressEvent(event);
+    }
+};
+
+/// The icons of a player's name: edit (a pencil), apply (a check) and remove (a bin), drawn so
+/// they look the same everywhere
+QIcon NameIcon(int kind, const QColor& color) {
+    QPixmap pixmap(QSize(14, 14) * 2);
+    pixmap.setDevicePixelRatio(2);
+    pixmap.fill(Qt::transparent);
+    QPainter painter{&pixmap};
+    painter.setRenderHint(QPainter::Antialiasing);
+    painter.setPen(QPen(color, 1.6, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+    painter.setBrush(Qt::NoBrush);
+    if (kind == 0) { // pencil
+        painter.drawLine(QPointF(3, 11), QPointF(10.5, 3.5));
+        painter.drawLine(QPointF(9, 2), QPointF(12, 5));
+        painter.drawLine(QPointF(2.5, 11.5), QPointF(2, 12));
+    } else if (kind == 1) { // check
+        const QPointF check[3] = {QPointF(2.5, 7.5), QPointF(5.5, 10.5), QPointF(11.5, 3.5)};
+        painter.drawPolyline(check, 3);
+    } else { // bin
+        painter.drawLine(QPointF(2, 3.5), QPointF(12, 3.5));
+        painter.drawLine(QPointF(5.5, 3.5), QPointF(5.5, 2));
+        painter.drawLine(QPointF(5.5, 2), QPointF(8.5, 2));
+        painter.drawLine(QPointF(8.5, 2), QPointF(8.5, 3.5));
+        painter.drawRoundedRect(QRectF(3.5, 3.5, 7, 9), 1, 1);
+        painter.drawLine(QPointF(6, 6), QPointF(6, 10));
+        painter.drawLine(QPointF(8, 6), QPointF(8, 10));
+    }
+    painter.end();
+    return QIcon{pixmap};
+}
+
 class PlayerRow : public QFrame {
 public:
     PlayerRow(int player_, QWidget* parent) : QFrame(parent), player{player_} {
@@ -497,7 +560,9 @@ ConfigurePlayerAssignment::ConfigurePlayerAssignment(QWidget* parent) : QWidget(
     // through Steam Input
     auto* steam_box = new QGroupBox(tr("Steam Input"), this);
     steam_panel = steam_box;
-    auto* steam_layout = new QHBoxLayout(steam_box);
+    auto* steam_column = new QVBoxLayout(steam_box);
+    auto* steam_layout = new QHBoxLayout();
+    steam_column->addLayout(steam_layout);
     auto* steam_text = new QVBoxLayout();
     steam_text->setSpacing(1);
     auto* steam_title = new QLabel(tr("Bypass Steam Input"), steam_box);
@@ -514,17 +579,61 @@ ConfigurePlayerAssignment::ConfigurePlayerAssignment(QWidget* parent) : QWidget(
     steam_restart = new QLabel(tr("Restart Eden to apply this change."), steam_box);
     steam_text->addWidget(steam_title);
     steam_text->addWidget(steam_note);
-    steam_text->addWidget(steam_restart);
     steam_layout->addLayout(steam_text, 1);
     steam_switch = new ToggleSwitch(steam_box);
     steam_switch->setToolTip(tr("On: Eden reads the controllers directly"));
     steam_layout->addWidget(steam_switch, 0, Qt::AlignVCenter);
     original_bypass = Settings::values.console_bypass_steam.GetValue();
     steam_switch->setChecked(original_bypass);
+    // (Bypass and the reader exclude each other: turning one on turns the other off)
     connect(steam_switch, &QAbstractButton::toggled, this, [this](bool on) {
         Settings::values.console_bypass_steam.SetValue(on);
+        if (on && reader_switch) {
+            reader_switch->setChecked(false);
+        }
         UpdateModeUi();
     });
+
+    // Experimental: the motion of Valve's controllers read from their own reports, so SDL never
+    // talks to them and Steam keeps them (Linux)
+    auto* reader_layout = new QHBoxLayout();
+    reader_layout->setContentsMargins(0, 6, 0, 0);
+    auto* reader_text = new QVBoxLayout();
+    reader_text->setSpacing(1);
+    auto* reader_title =
+        new QLabel(tr("Read Valve Controllers Directly (Experimental)"), steam_box);
+    reader_title->setFont(title_font);
+    auto* reader_note = new QLabel(
+        tr("Reads the motion of the Steam Deck and Steam Controllers straight from the "
+           "controller, so nothing competes with Steam for them. Try this if a Steam Controller "
+           "misbehaves under Steam. Turns Bypass Steam Input off, and the other way round."),
+        steam_box);
+    reader_note->setWordWrap(true);
+    reader_note->setObjectName(QStringLiteral("note"));
+    reader_text->addWidget(reader_title);
+    reader_text->addWidget(reader_note);
+    reader_layout->addLayout(reader_text, 1);
+    reader_switch = new ToggleSwitch(steam_box);
+    reader_switch->setToolTip(tr("On: Eden reads Valve controllers' motion directly"));
+    reader_layout->addWidget(reader_switch, 0, Qt::AlignVCenter);
+    steam_column->addLayout(reader_layout);
+    steam_column->addWidget(steam_restart);
+    original_reader = Settings::values.console_valve_reader.GetValue();
+    // (Both on, from before they excluded each other: Bypass wins, as in the engine)
+    reader_switch->setChecked(original_reader && !original_bypass);
+    connect(reader_switch, &QAbstractButton::toggled, this, [this](bool on) {
+        Settings::values.console_valve_reader.SetValue(on);
+        if (on) {
+            steam_switch->setChecked(false);
+        }
+        UpdateModeUi();
+    });
+#ifndef __linux__
+    // (Linux only)
+    reader_title->setVisible(false);
+    reader_note->setVisible(false);
+    reader_switch->setVisible(false);
+#endif
     layout->addWidget(steam_box);
 
     // Assign Handheld Controller: declare the handheld's own controller instead of guessing it.
@@ -771,6 +880,7 @@ ConfigurePlayerAssignment::~ConfigurePlayerAssignment() {
         Settings::values.console_history_gaps.SetValue(original_history_gaps);
         Settings::values.console_debug_probes.SetValue(original_probes);
         Settings::values.console_bypass_steam.SetValue(original_bypass);
+        Settings::values.console_valve_reader.SetValue(original_reader);
     }
 }
 
@@ -815,8 +925,11 @@ void ConfigurePlayerAssignment::UpdateModeUi() {
     // (Bypass Steam Input: only under Steam; applies to a Modern Console start)
     steam_panel->setVisible(handler_group->checkedId() == HandlerModern &&
                             Common::RunningUnderSteam());
+    // (The reader only runs without Bypass Steam Input)
+    const bool reader_wanted = reader_switch->isChecked() && !steam_switch->isChecked();
     steam_restart->setVisible(steam_switch->isChecked() !=
-                              Common::GetControllerConsoleState().steam_bypassed);
+                                  Common::GetControllerConsoleState().steam_bypassed ||
+                              reader_wanted != InputCommon::ValveMotion::Enabled());
     manual_panel->setVisible(handler_group->checkedId() == HandlerManual);
     // Only the automatic modes have live players to show
     const bool automatic = IsAutomatic(selected);
@@ -1030,7 +1143,8 @@ void ConfigurePlayerAssignment::RefreshPlayers() {
     if (!handheld_has_player) {
         signature += QStringLiteral("h:") + QString::fromStdString(handheld_name);
     }
-    if (signature != players_signature) {
+    // (Not while a name is being typed: the rows would be rebuilt under it)
+    if (signature != players_signature && !editing_name) {
         players_signature = signature;
         const bool any_turn_off = std::any_of(players.begin(), players.end(),
                                               [](const auto& e) { return e.turn_off != 0; });
@@ -1060,6 +1174,9 @@ void ConfigurePlayerAssignment::RefreshPlayers() {
             // player the controller started as
             auto* badge_box = new QWidget(row);
             badge_box->setFixedSize(40, 24);
+            // (Only the badge and its mark show: the dark themes paint a plain widget)
+            badge_box->setAttribute(Qt::WA_TranslucentBackground);
+            badge_box->setStyleSheet(QStringLiteral("background: transparent;"));
             auto* badge = new QLabel(QStringLiteral("P%1").arg(player + 1), badge_box);
             badge->setAlignment(Qt::AlignCenter);
             badge->setGeometry(0, 3, 34, 20);
@@ -1089,7 +1206,79 @@ void ConfigurePlayerAssignment::RefreshPlayers() {
                 }
             }
             line->addWidget(badge_box);
-            line->addWidget(new QLabel(QString::fromStdString(entry.name), row), 1);
+            // The name, with a pencil to name the player's controller ("John" shows as
+            // "John (Xbox)"); editing shows the field, apply and remove
+            const QString given = QString::fromStdString(entry.custom_name);
+            auto* name_label = new QLabel(QString::fromStdString(entry.name), row);
+            auto* name_edit = new PlayerNameEdit(given, row);
+            name_edit->setObjectName(QStringLiteral("playerName"));
+            name_edit->setMaxLength(16);
+            name_edit->setPlaceholderText(tr("Name this controller"));
+            name_edit->setStyleSheet(ModernComboStyle().replace(QStringLiteral("QComboBox"),
+                                                                QStringLiteral("QLineEdit")));
+            name_edit->hide();
+            const QColor icon_color = Accent(this);
+            const auto name_button = [row, icon_color](int kind, const QString& tip) {
+                auto* button = new QToolButton(row);
+                button->setIcon(NameIcon(kind, icon_color));
+                button->setIconSize(QSize(14, 14));
+                button->setAutoRaise(true);
+                button->setCursor(Qt::PointingHandCursor);
+                button->setToolTip(tip);
+                // (Clicking it keeps the field focused: leaving the field cancels)
+                button->setFocusPolicy(Qt::NoFocus);
+                return button;
+            };
+            auto* name_edit_button = name_button(0, tr("Name P%1's controller").arg(player + 1));
+            auto* name_apply = name_button(1, tr("Apply the name"));
+            auto* name_remove = name_button(2, tr("Remove the name"));
+            name_apply->hide();
+            // (The bin also shows beside the pencil while the controller has a name: one click
+            // puts its own name back)
+            name_remove->setVisible(!given.isEmpty());
+            name_edit_button->setEnabled(!entry.leaving);
+            name_remove->setEnabled(!entry.leaving);
+            const auto request = [player](const QString& value) {
+                auto& console = Common::GetControllerConsoleState();
+                std::scoped_lock lock{console.mutex};
+                console.rename_requests.emplace_back(player, value.trimmed().toStdString());
+            };
+            const auto editing = [=, this](bool on) {
+                // (While a name is typed, the rows aren't rebuilt under it)
+                editing_name = on;
+                name_label->setVisible(!on);
+                name_edit_button->setVisible(!on);
+                name_edit->setVisible(on);
+                name_apply->setVisible(on);
+                name_remove->setVisible(!given.isEmpty());
+                if (on) {
+                    name_edit->setText(given);
+                    name_edit->setFocus();
+                    name_edit->selectAll();
+                }
+            };
+            name_edit->on_apply = [=] {
+                editing(false);
+                if (name_edit->text().trimmed() != given) {
+                    request(name_edit->text());
+                }
+            };
+            name_edit->on_cancel = [=] { editing(false); };
+            connect(name_edit_button, &QToolButton::clicked, this, [=] { editing(true); });
+            connect(name_apply, &QToolButton::clicked, this, [=] { name_edit->on_apply(); });
+            connect(name_remove, &QToolButton::clicked, this, [=] {
+                editing(false);
+                request(QString{});
+            });
+            auto* name_line = new QHBoxLayout();
+            name_line->setSpacing(2);
+            name_line->addWidget(name_label);
+            name_line->addWidget(name_edit, 1);
+            name_line->addWidget(name_edit_button);
+            name_line->addWidget(name_apply);
+            name_line->addWidget(name_remove);
+            name_line->addStretch(1);
+            line->addLayout(name_line, 1);
             const bool live = !entry.leaving;
 
             // The profile the player's controller carries; picking one puts it on it, and

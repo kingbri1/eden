@@ -92,6 +92,9 @@ private:
     QAbstractButton* steam_switch = nullptr;
     QLabel* steam_restart = nullptr;
     bool original_bypass = false;
+    /// Read Valve Controllers Directly (experimental), in the same card
+    QAbstractButton* reader_switch = nullptr;
+    bool original_reader = false;
     QLabel* mode_info = nullptr;
     QWidget* display_box = nullptr;
     QWidget* about_box = nullptr;
@@ -133,6 +136,8 @@ private:
     QVBoxLayout* players_list = nullptr;
     QLabel* players_note = nullptr;
     QString players_signature;
+    /// A player's name is being typed (the rows wait)
+    bool editing_name = false;
     /// The player whose Swap was pressed first, waiting for the second (-1: none)
     int swap_from = -1;
     /// The rows and the player each shows, for restyling them while a controller is active

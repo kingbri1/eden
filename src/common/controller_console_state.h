@@ -7,6 +7,7 @@
 #include <chrono>
 #include <cstdlib>
 #include <mutex>
+#include <set>
 #include <string>
 #include <utility>
 #include <vector>
@@ -43,6 +44,8 @@ struct ControllerConsoleState {
         /// guess on a reconnect
         int origin = -1;
         bool guessed = false;
+        /// The name given to its controller ("" none): `name` is then "Name (Xbox)"
+        std::string custom_name;
     };
     /// True while an automatic assignment mode runs (the engine owns the players)
     bool engine_active = false;
@@ -62,6 +65,8 @@ struct ControllerConsoleState {
     /// Players whose Bluetooth controller is to be turned off (disconnected): it sits out until
     /// it reconnects, and the player is free for the next controller to connect
     std::vector<int> remove_requests;
+    /// Names given to players' controllers from the Controllers tab ("" takes it off)
+    std::vector<std::pair<int, std::string>> rename_requests;
     /// Players whose controller the Controllers tab asked to rumble (a click on its row)
     std::vector<int> rumble_requests;
     /// An input profile picked for a player: the engine puts the profile's mappings on the set
@@ -76,6 +81,11 @@ struct ControllerConsoleState {
     /// Bypass Steam Input took effect at startup: SDL has every controller, and the engine
     /// leaves Steam's virtual pads alone (as launched outside Steam)
     std::atomic<bool> steam_bypassed{false};
+    /// Whether Steam's virtual pads are around (none when Steam Input is off for Eden), and
+    /// the controller models Steam hid that Eden opened again for their motion (vendor << 16 |
+    /// product): only those are motion sources; any other real controller plays
+    std::atomic<bool> steam_pads_present{false};
+    std::set<unsigned> steam_hidden_models;
     /// Bumped whenever the engine reloads the emulated controllers (a swap, a pad arriving or
     /// leaving): the Controls page refreshes its player tabs from them when it changes
     unsigned long long generation = 0;
@@ -95,10 +105,19 @@ struct ControllerConsoleState {
 }
 
 /// True when Steam Input's virtual pads are the players: under Steam, without Bypass Steam
-/// Input. Otherwise (a direct launch, or bypassed) the real controllers are, and everything
-/// works as launched outside Steam.
+/// Input, while Steam's pads are around. Otherwise (a direct launch, bypassed, or Steam Input
+/// off for Eden) the real controllers are, and everything works as launched outside Steam.
 [[nodiscard]] inline bool SteamPadsInUse() {
-    return RunningUnderSteam() && !GetControllerConsoleState().steam_bypassed;
+    const auto& state = GetControllerConsoleState();
+    return RunningUnderSteam() && !state.steam_bypassed && state.steam_pads_present;
+}
+
+/// True for a controller model Steam hid that Eden opened again for its motion (a motion source
+/// next to its virtual pad, never a player)
+[[nodiscard]] inline bool SteamHidModel(unsigned vendor, unsigned product) {
+    auto& state = GetControllerConsoleState();
+    std::scoped_lock lock{state.mutex};
+    return state.steam_hidden_models.contains(vendor << 16 | product);
 }
 
 /// Debug Probes: detailed controller traces in the log, for bug reports

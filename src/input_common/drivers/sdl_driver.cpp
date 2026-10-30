@@ -23,6 +23,7 @@
 #include "common/thread.h"
 #include "common/vector_math.h"
 #include "input_common/drivers/sdl_driver.h"
+#include "input_common/drivers/valve_motion.h"
 
 namespace InputCommon {
 
@@ -696,8 +697,11 @@ namespace {
 /// Controllers with motion sensors that Steam Input hides behind its sensorless virtual pads
 bool IsMotionController(unsigned vendor, unsigned product) {
     switch (vendor) {
-    case 0x28DE: // Valve: Steam Deck, Steam Controller (wired, wireless), Steam Controller (2026)
-        return product == 0x1205 || product == 0x1102 || product == 0x1142 || product == 0x1302;
+    case 0x28DE:
+        // The Steam Deck only. Steam Controllers stay with Steam: SDL's driver would talk to them
+        // next to it (they may not take two voices); their motion comes from Read Valve
+        // Controllers Directly (ValveMotion), which only listens.
+        return product == 0x1205;
     case 0x054C: // Sony
     case 0x057E: // Nintendo
         return true;
@@ -812,9 +816,16 @@ void UnhideMotionControllers() {
             continue;
         }
         if (std::sscanf(entry.c_str(), "%x/%x", &vendor, &product) == 2 &&
-            IsMotionController(vendor, product)) {
+            IsMotionController(vendor, product) &&
+            // (Read directly instead, when the experimental reader runs: Steam keeps them)
+            !(ValveMotion::Enabled() && vendor == 0x28DE && ValveMotion::Family(product) != 0)) {
             dropped += entry + ',';
             UnhiddenControllers().insert(vendor << 16 | product);
+            {
+                auto& state = Common::GetControllerConsoleState();
+                std::scoped_lock lock{state.mutex};
+                state.steam_hidden_models.insert(vendor << 16 | product);
+            }
             continue;
         }
         kept += entry + ',';

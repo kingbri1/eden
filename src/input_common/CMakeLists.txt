@@ -17,6 +17,8 @@ add_library(input_common STATIC
     drivers/touch_screen.h
     drivers/udp_client.cpp
     drivers/udp_client.h
+    drivers/valve_motion.cpp
+    drivers/valve_motion.h
     drivers/virtual_amiibo.cpp
     drivers/virtual_amiibo.h
     drivers/virtual_gamepad.cpp
