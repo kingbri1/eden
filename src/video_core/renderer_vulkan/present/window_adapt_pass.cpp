@@ -12,7 +12,7 @@
 #include "video_core/renderer_vulkan/present/util.h"
 #include <mutex>
 
-#include "common/controller_overlay_frame.h"
+#include "common/overlay_panels.h"
 #include "common/logging.h"
 #include "video_core/renderer_vulkan/present/present_push_constants.h"
 #include "video_core/renderer_vulkan/present/util.h"
@@ -78,14 +78,14 @@ void WindowAdaptPass::Draw(const Device& device, RasterizerVulkan& rasterizer, S
         layer_it++;
     }
 
-    // The controller overlays (players panel, hints): one more quad each, straight-alpha,
+    // The overlay panels (see common/overlay_panels.h): one more quad each, straight-alpha,
     // drawn last.
-    std::array<bool, 2> overlay_draw{};
-    std::array<PresentPushConstants, 2> overlay_push{};
-    std::array<VkDescriptorSet, 2> overlay_set{};
-    const auto frames = Common::GetControllerOverlayFrames();
-    for (size_t o = 0; o < frames.size(); ++o) {
-        auto& overlay_frame = *frames[o];
+    std::array<bool, Common::OverlayPanelCount> overlay_draw{};
+    std::array<PresentPushConstants, Common::OverlayPanelCount> overlay_push{};
+    std::array<VkDescriptorSet, Common::OverlayPanelCount> overlay_set{};
+    auto& panels = Common::GetOverlayPanels();
+    for (size_t o = 0; o < panels.size(); ++o) {
+        auto& overlay_frame = panels[o];
         auto& quad = overlays[o];
         std::scoped_lock lock{overlay_frame.mutex};
         if (!overlay_frame.enabled || overlay_frame.pixels.empty() || overlay_frame.width == 0 ||
@@ -133,10 +133,13 @@ void WindowAdaptPass::Draw(const Device& device, RasterizerVulkan& rasterizer, S
         push.modelview_matrix =
             MakeOrthographicMatrix(f32(layout.width), static_cast<f32>(layout.height));
         const auto& screen = layout.screen;
-        const f32 w = f32(extent.width);
-        const f32 h = f32(extent.height);
-        const f32 x = f32(screen.left) + 4.f;
-        const f32 y = overlay_frame.bottom ? f32(screen.bottom) - h - 4.f : f32(screen.top) + 4.f;
+        const auto place = Common::PlaceOverlayPanel(overlay_frame, f32(screen.left),
+                                                     f32(screen.top), f32(screen.right),
+                                                     f32(screen.bottom));
+        const f32 w = place.width;
+        const f32 h = place.height;
+        const f32 x = place.x;
+        const f32 y = place.y;
         push.vertices[0] = ScreenRectVertex(x, y, 0.f, 0.f);
         push.vertices[1] = ScreenRectVertex(x + w, y, 1.f, 0.f);
         push.vertices[2] = ScreenRectVertex(x, y + h, 0.f, 1.f);

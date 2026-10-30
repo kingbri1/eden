@@ -11,6 +11,7 @@
 #include <list>
 
 #include "common/math_util.h"
+#include "common/overlay_panels.h"
 #include "video_core/vulkan_common/vulkan_wrapper.h"
 
 namespace Layout {
@@ -63,10 +64,8 @@ private:
     vk::Pipeline premultiplied_pipeline;
     vk::Pipeline coverage_pipeline;
 
-    // Controller debug overlay: a straight-alpha quad composited on top of the layers.
-    // The CPU blend in Layer::UpdateRawImage only covers the unaccelerated present path;
-    // the accelerated path presents a GPU texture directly, so the panel lives here.
-    // One per overlay frame: the players panel and the hints.
+    // The overlay panels (common/overlay_panels.h): a straight-alpha quad each, composited on
+    // top of the layers, for both the accelerated and the unaccelerated present paths.
     struct OverlayQuad {
         vk::Image image;
         vk::ImageView view;
@@ -76,7 +75,7 @@ private:
         std::uint64_t version = 0;
         bool ready = false;
     };
-    std::array<OverlayQuad, 2> overlays;
+    std::array<OverlayQuad, Common::OverlayPanelCount> overlays;
 };
 
 } // namespace Vulkan

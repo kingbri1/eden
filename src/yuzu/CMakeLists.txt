@@ -198,6 +198,8 @@ add_executable(yuzu
     multiplayer/state.cpp
     multiplayer/state.h
     multiplayer/validation.h
+    overlay_panel.cpp
+    overlay_panel.h
     startup_checks.cpp
     startup_checks.h
     set_play_time_dialog.cpp
