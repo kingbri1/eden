@@ -703,6 +703,8 @@ private:
     /// Each player's given name as last shown ("" none), and the name being typed in the overlay
     /// (its pencil): the player (-1 none) and the text so far
     std::array<std::string, 10> overlay_custom_name{};
+    /// The name of the controller that last left each player, for its hint
+    std::array<QString, 10> overlay_left_name{};
     int overlay_edit_player = -1;
     QString overlay_edit_text;
     /// The player whose tab the next settings dialog opens on (-1: as usual)
