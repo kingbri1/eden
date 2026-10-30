@@ -23,7 +23,7 @@ namespace InputCommon {
 
 namespace {
 
-constexpr u16 VendorValve = 0x28DE;
+[[maybe_unused]] constexpr u16 VendorValve = 0x28DE; // (Linux only)
 
 enum Family : int {
     FamilyNone = 0,
