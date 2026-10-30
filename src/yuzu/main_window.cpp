@@ -1924,17 +1924,6 @@ void MainWindow::ClearRuntimeCheats() {
     ui->menu_Cheats->menuAction()->setVisible(false);
 }
 
-bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
-    if (watched == ui->menu_Cheats && event->type() == QEvent::MouseButtonRelease) {
-        const auto* mouse_event = static_cast<QMouseEvent*>(event);
-        auto* action = ui->menu_Cheats->actionAt(mouse_event->pos());
-        if (mouse_event->button() == Qt::LeftButton && action && action->isEnabled() &&
-            action->isCheckable()) {
-            action->trigger();
-            return true;
-        }
-    }
-    return QMainWindow::eventFilter(watched, event);
 namespace {
 
 /// The joystick API is shared with the input driver's threads (the rumble worker);
@@ -6032,6 +6021,15 @@ bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
     // The controller overlay takes the mouse over its rows (drag to swap, click to rumble)
     if (watched == render_window && HandleOverlayMouse(event)) {
         return true;
+    }
+    if (watched == ui->menu_Cheats && event->type() == QEvent::MouseButtonRelease) {
+        const auto* mouse_event = static_cast<QMouseEvent*>(event);
+        auto* action = ui->menu_Cheats->actionAt(mouse_event->pos());
+        if (mouse_event->button() == Qt::LeftButton && action && action->isEnabled() &&
+            action->isCheckable()) {
+            action->trigger();
+            return true;
+        }
     }
     return QMainWindow::eventFilter(watched, event);
 }

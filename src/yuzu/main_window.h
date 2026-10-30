@@ -187,9 +187,6 @@ public:
 
     std::filesystem::path GetShortcutPath(QtCommon::Game::ShortcutTarget target);
 
-protected:
-    bool eventFilter(QObject* watched, QEvent* event) override;
-
 signals:
 
     /**
