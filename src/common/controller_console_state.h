@@ -46,6 +46,11 @@ struct ControllerConsoleState {
         bool guessed = false;
         /// The name given to its controller ("" none): `name` is then "Name (Xbox)"
         std::string custom_name;
+        /// Its controller's battery: percent (-1 unknown), charging, and wired (no battery to
+        /// show, or plugged in)
+        int battery = -1;
+        bool charging = false;
+        bool wired = false;
     };
     /// True while an automatic assignment mode runs (the engine owns the players)
     bool engine_active = false;

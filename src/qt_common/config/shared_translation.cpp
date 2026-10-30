@@ -31,8 +31,10 @@ std::unique_ptr<TranslationMap> InitializeTranslations(QObject* parent) {
     // A setting can be ignored by giving it a blank name
 
     // Toggled from View > Show Controller Overlay
-    INSERT(Settings, console_debug_overlay, QString(), QString());
-    INSERT(Settings, console_hints, QString(), QString());
+    INSERT(Settings, console_debug_overlay, tr("Controller overlay"),
+           tr("The players, their controllers and their last buttons in the top-left corner."));
+    INSERT(Settings, console_hints, tr("Controller hints"),
+           tr("Names a controller in the bottom-left corner when it joins or leaves."));
     INSERT(Settings, console_history, QString(), QString());
     INSERT(Settings, console_history_size, QString(), QString());
     INSERT(Settings, console_history_seconds, QString(), QString());
@@ -41,6 +43,15 @@ std::unique_ptr<TranslationMap> InitializeTranslations(QObject* parent) {
     INSERT(Settings, console_bypass_steam, QString(), QString());
     INSERT(Settings, console_valve_reader, QString(), QString());
     INSERT(Settings, console_controller_names, QString(), QString());
+    INSERT(Settings, console_joycon_auto, tr("Use any controller as Joy-Cons"),
+           tr("When the game only takes Joy-Cons, controllers act as Joy-Cons."));
+    INSERT(Settings, console_pause_disconnect, tr("Pause when a controller disconnects"),
+           tr("Pauses when a player's controller has been gone for 3 seconds."));
+    INSERT(Settings, console_player_lights, tr("Player lights"),
+           tr("Controllers' player lights show their player."));
+    INSERT(Settings, console_button_labels, tr("Button layout by label"),
+           tr("Xbox and PlayStation style controllers' buttons by their labels instead of their "
+              "positions."));
     INSERT(Settings, modern_seat_profiles, QString(), QString());
     INSERT(Settings, builtin_pad_identity, QString(), QString());
     INSERT(Settings, builtin_pad_steam_handle, QString(), QString());

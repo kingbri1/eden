@@ -43,6 +43,8 @@ add_executable(yuzu
     configuration/configure_applets.cpp
     configuration/configure_applets.h
     configuration/configure_applets.ui
+    configuration/configure_modern_per_game.cpp
+    configuration/configure_modern_per_game.h
     configuration/configure_audio.cpp
     configuration/configure_audio.h
     configuration/configure_audio.ui

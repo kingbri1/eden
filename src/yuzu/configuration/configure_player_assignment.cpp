@@ -11,6 +11,7 @@
 #include <QAbstractButton>
 #include <QAbstractItemView>
 #include <QApplication>
+#include <QBoxLayout>
 #include <QButtonGroup>
 #include <QCheckBox>
 #include <QComboBox>
@@ -169,6 +170,57 @@ protected:
         QLineEdit::keyPressEvent(event);
     }
 };
+
+/// A setting's row: its title in bold, a line about it, and its control on the right
+void AddOptionRow(QBoxLayout* to, QWidget* parent, const QString& title, const QString& note,
+                  QWidget* control) {
+    auto* line = new QHBoxLayout();
+    auto* text = new QVBoxLayout();
+    text->setSpacing(1);
+    auto* title_label = new QLabel(title, parent);
+    QFont font = title_label->font();
+    font.setBold(true);
+    title_label->setFont(font);
+    auto* note_label = new QLabel(note, parent);
+    note_label->setWordWrap(true);
+    note_label->setObjectName(QStringLiteral("note"));
+    text->addWidget(title_label);
+    text->addWidget(note_label);
+    line->addLayout(text, 1);
+    line->addWidget(control, 0, Qt::AlignVCenter);
+    to->addLayout(line);
+}
+
+/// A controller's battery: a small cell filled to its charge (red when low, a bolt while it
+/// charges), as the overlay draws it
+QPixmap BatteryIcon(int percent, bool charging) {
+    QPixmap pixmap(QSize(20, 12) * 2);
+    pixmap.setDevicePixelRatio(2);
+    pixmap.fill(Qt::transparent);
+    QPainter painter{&pixmap};
+    painter.setRenderHint(QPainter::Antialiasing);
+    const QRectF cell(1, 2, 15, 8);
+    painter.setPen(QPen(QColor(150, 155, 162), 1.2));
+    painter.setBrush(Qt::NoBrush);
+    painter.drawRoundedRect(cell, 2, 2);
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(QColor(150, 155, 162));
+    painter.drawRect(QRectF(cell.right() + 0.6, cell.center().y() - 1.5, 1.8, 3));
+    painter.setBrush(percent <= 15 && !charging ? QColor(220, 60, 60) : QColor(70, 180, 100));
+    painter.drawRect(QRectF(cell.left() + 1.5, cell.top() + 1.5,
+                            (cell.width() - 3) * (std::clamp)(percent, 0, 100) / 100.0,
+                            cell.height() - 3));
+    if (charging) {
+        painter.setPen(QPen(Qt::white, 1.2));
+        const QPointF c = cell.center();
+        const QPointF bolt[3] = {QPointF(c.x() + 1, c.y() - 3), QPointF(c.x() - 1.5, c.y() + 0.5),
+                                 QPointF(c.x() + 1.5, c.y() - 0.5)};
+        painter.drawPolyline(bolt, 3);
+        painter.drawLine(bolt[2], QPointF(c.x() - 1, c.y() + 3));
+    }
+    painter.end();
+    return pixmap;
+}
 
 /// The icons of a player's name: edit (a pencil), apply (a check) and remove (a bin), drawn so
 /// they look the same everywhere
@@ -694,28 +746,67 @@ ConfigurePlayerAssignment::ConfigurePlayerAssignment(QWidget* parent) : QWidget(
     now_layout->addWidget(players_note);
     layout->addWidget(now_box);
 
+    // Gameplay: how players' controllers behave in games
+    auto* gameplay = new QGroupBox(tr("Gameplay"), this);
+    gameplay_box = gameplay;
+    auto* gameplay_layout = new QVBoxLayout(gameplay);
+    const auto add_option = [gameplay, gameplay_layout](const QString& title, const QString& note,
+                                                        QWidget* control) {
+        AddOptionRow(gameplay_layout, gameplay, title, note, control);
+    };
+    joycon_switch = new ToggleSwitch(gameplay);
+    add_option(tr("Use Any Controller as Joy-Cons"),
+               tr("When a game only takes Joy-Cons, such as one Joy-Con per player, your "
+                  "controllers act as Joy-Cons automatically, with the buttons arranged to fit. A "
+                  "controller type picked in a player's tab is left as it is."),
+               joycon_switch);
+    original_joycon = Settings::values.console_joycon_auto.GetValue();
+    joycon_switch->setChecked(original_joycon);
+    connect(joycon_switch, &QAbstractButton::toggled, this,
+            [](bool on) { Settings::values.console_joycon_auto.SetValue(on); });
+
+    layout_group = new QButtonGroup(this);
+    auto* layout_choice =
+        MakeSegmented(gameplay, {tr("By Position"), tr("By Label")}, {0, 1}, layout_group);
+    add_option(tr("Button Layout"),
+               tr("For Xbox and PlayStation style controllers. By Position: the button where the "
+                  "Switch has A acts as A. By Label: the button marked A acts as A. Nintendo "
+                  "controllers already match both ways."),
+               layout_choice);
+    original_labels = Settings::values.console_button_labels.GetValue();
+    layout_group->button(original_labels ? 1 : 0)->setChecked(true);
+    connect(layout_group, &QButtonGroup::idClicked, this,
+            [](int id) { Settings::values.console_button_labels.SetValue(id == 1); });
+
+    pause_switch = new ToggleSwitch(gameplay);
+    add_option(tr("Pause When a Controller Disconnects"),
+               tr("Pauses the game when a player's controller has been gone for 3 seconds, and "
+                  "resumes when a controller takes that player again."),
+               pause_switch);
+    original_pause = Settings::values.console_pause_disconnect.GetValue();
+    pause_switch->setChecked(original_pause);
+    connect(pause_switch, &QAbstractButton::toggled, this,
+            [](bool on) { Settings::values.console_pause_disconnect.SetValue(on); });
+
+    lights_switch = new ToggleSwitch(gameplay);
+    add_option(tr("Player Lights"),
+               tr("Controllers' player lights and light bars show their player, in its colour. "
+                  "Under Steam, Steam sets the lights of the controllers it handles."),
+               lights_switch);
+    original_lights = Settings::values.console_player_lights.GetValue();
+    lights_switch->setChecked(original_lights);
+    connect(lights_switch, &QAbstractButton::toggled, this,
+            [](bool on) { Settings::values.console_player_lights.SetValue(on); });
+    layout->addWidget(gameplay);
+
     // What shows over the game: a title, a line about it and a switch per item
     auto* display = new QGroupBox(tr("On-Screen Display"), this);
     display_box = display;
     auto* display_layout = new QVBoxLayout(display);
     const auto add_switch_to = [display](QVBoxLayout* to, const QString& title,
                                          const QString& note) {
-        auto* line = new QHBoxLayout();
-        auto* text = new QVBoxLayout();
-        text->setSpacing(1);
-        auto* title_label = new QLabel(title, display);
-        QFont font = title_label->font();
-        font.setBold(true);
-        title_label->setFont(font);
-        auto* note_label = new QLabel(note, display);
-        note_label->setWordWrap(true);
-        note_label->setObjectName(QStringLiteral("note"));
-        text->addWidget(title_label);
-        text->addWidget(note_label);
-        line->addLayout(text, 1);
         auto* toggle = new ToggleSwitch(display);
-        line->addWidget(toggle, 0, Qt::AlignVCenter);
-        to->addLayout(line);
+        AddOptionRow(to, display, title, note, toggle);
         return toggle;
     };
     const auto add_switch = [&](const QString& title, const QString& note) {
@@ -838,7 +929,9 @@ ConfigurePlayerAssignment::ConfigurePlayerAssignment(QWidget* parent) : QWidget(
     add_about(tr("Modern Console"),
               tr("Controllers are assigned like on the console: each one that connects becomes "
                  "the next player, with nothing to set up. Players keep their own controls when "
-                 "they swap, and a profile picked for a player is used again next time."));
+                 "they swap, and a profile picked for a player is used again next time. Its "
+                 "mappings are its own: each controller starts with its standard mapping, and "
+                 "the Manual modes' players are never changed. Keyboard and mouse: use Manual."));
     add_about(tr("Handheld Console"),
               tr("For a handheld PC with built-in controls. The same as Modern Console, but the "
                  "built-in controls always come last: connect a controller and it becomes "
@@ -884,6 +977,10 @@ ConfigurePlayerAssignment::~ConfigurePlayerAssignment() {
         Settings::values.console_history_gaps.SetValue(original_history_gaps);
         Settings::values.console_debug_probes.SetValue(original_probes);
         Settings::values.console_bypass_steam.SetValue(original_bypass);
+        Settings::values.console_joycon_auto.SetValue(original_joycon);
+        Settings::values.console_button_labels.SetValue(original_labels);
+        Settings::values.console_pause_disconnect.SetValue(original_pause);
+        Settings::values.console_player_lights.SetValue(original_lights);
         Settings::values.console_valve_reader.SetValue(original_reader);
     }
 }
@@ -962,6 +1059,7 @@ void ConfigurePlayerAssignment::UpdateModeUi() {
     }
     now_box->setVisible(automatic);
     display_box->setVisible(automatic);
+    gameplay_box->setVisible(automatic);
     about_box->setVisible(automatic);
     debug_box->setVisible(automatic);
     builtin_row->setVisible(selected == Settings::AppletMode::HandheldConsoleMode);
@@ -1142,7 +1240,9 @@ void ConfigurePlayerAssignment::RefreshPlayers() {
             QLatin1Char('/') + QString::fromStdString(entry.profile) +
             (entry.leaving ? QStringLiteral("x") : QString{}) + QString::number(entry.turn_off) +
             QLatin1Char('/') + QString::number(entry.origin) +
-            (entry.guessed ? QStringLiteral("?") : QString{}) + QLatin1Char('|');
+            (entry.guessed ? QStringLiteral("?") : QString{}) + QLatin1Char('/') +
+            QString::number(entry.battery / 5) +
+            (entry.charging ? QStringLiteral("c") : QString{}) + QLatin1Char('|');
     }
     if (!handheld_has_player) {
         signature += QStringLiteral("h:") + QString::fromStdString(handheld_name);
@@ -1274,9 +1374,29 @@ void ConfigurePlayerAssignment::RefreshPlayers() {
                 editing(false);
                 request(QString{});
             });
+            // The controller's battery, when it tells its charge
+            QLabel* battery = nullptr;
+            if (entry.battery >= 0 && !entry.leaving) {
+                battery = new QLabel(row);
+                battery->setPixmap(BatteryIcon(entry.battery, entry.charging));
+                battery->setText(QString{});
+                battery->setToolTip(entry.charging ? tr("Battery %1% (charging)").arg(entry.battery)
+                                                   : tr("Battery %1%").arg(entry.battery));
+            }
+            auto* battery_text =
+                battery ? new QLabel(QStringLiteral("%1%").arg(entry.battery), row) : nullptr;
+            if (battery_text) {
+                battery_text->setObjectName(QStringLiteral("note"));
+                battery_text->setToolTip(battery->toolTip());
+            }
             auto* name_line = new QHBoxLayout();
             name_line->setSpacing(2);
             name_line->addWidget(name_label);
+            if (battery) {
+                name_line->addSpacing(6);
+                name_line->addWidget(battery);
+                name_line->addWidget(battery_text);
+            }
             name_line->addWidget(name_edit, 1);
             name_line->addWidget(name_edit_button);
             name_line->addWidget(name_apply);

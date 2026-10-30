@@ -671,6 +671,9 @@ private:
         /// The player its controller started as (-1: this one), and whether it was a guess
         int origin = -1;
         bool guessed = false;
+        /// Its controller's battery (percent, -1 unknown) and whether it charges
+        int battery = -1;
+        bool charging = false;
     };
     std::vector<OverlayRow> overlay_rows;
     std::vector<bool> overlay_blink;
@@ -702,6 +705,26 @@ private:
     std::array<std::string, 10> overlay_custom_name{};
     /// The name of the controller that last left each player, for its hint
     std::array<QString, 10> overlay_left_name{};
+    /// Controllers' batteries, read at most every 10 seconds (by connection), and the controllers
+    /// already told about a low battery this session
+    struct Battery {
+        int percent = -1;
+        bool charging = false;
+        bool wired = false;
+    };
+    std::map<u32, std::pair<qint64, Battery>> battery_read;
+    std::set<std::string> battery_low_told;
+    /// Use Any Controller as Joy-Cons: each player's type before the engine changed it for a game
+    /// that only takes Joy-Cons, and the type it set (a type set by hand is left alone)
+    std::array<std::optional<Settings::ControllerType>, 10> joycon_auto_from{};
+    std::array<std::optional<Settings::ControllerType>, 10> joycon_auto_set{};
+    /// Pause When a Controller Disconnects: since when each player waits for its controller
+    /// (0 none), and the players a pause was for (resumed when they all have one again)
+    std::array<qint64, 10> waiting_since{};
+    std::set<int> disconnect_paused;
+    std::set<int> pause_done;
+    /// Player Lights: the player each controller's lights were last set to (by connection)
+    std::map<u32, int> lights_player;
     int overlay_edit_player = -1;
     QString overlay_edit_text;
     /// The player whose tab the next settings dialog opens on (-1: as usual)
@@ -737,8 +760,13 @@ private:
         qint64 at;
         /// Left because Turn Off turned its controller off
         bool turned_off = false;
+        /// Said instead of joined / left ("" none): how the player's controller changed
+        QString note;
     };
     std::vector<ControllerHint> controller_hints;
+    /// A game running with no controller: since when (0 none), and whether it was said
+    qint64 no_controller_since = 0;
+    bool no_controller_told = false;
     /// The flashes already turned into hints, per player (green, red)
     std::array<qint64, 10> hinted_join{};
     std::array<qint64, 10> hinted_leave{};

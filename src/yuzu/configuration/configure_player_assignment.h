@@ -92,6 +92,17 @@ private:
     QAbstractButton* steam_switch = nullptr;
     QLabel* steam_restart = nullptr;
     bool original_bypass = false;
+    /// The Gameplay card: Use Any Controller as Joy-Cons, Button Layout, Pause When a Controller
+    /// Disconnects, Player Lights
+    QWidget* gameplay_box = nullptr;
+    QAbstractButton* joycon_switch = nullptr;
+    bool original_joycon = true;
+    QButtonGroup* layout_group = nullptr;
+    bool original_labels = false;
+    QAbstractButton* pause_switch = nullptr;
+    bool original_pause = false;
+    QAbstractButton* lights_switch = nullptr;
+    bool original_lights = true;
     /// Read Valve Controllers Directly (experimental), in the same card
     QAbstractButton* reader_switch = nullptr;
     bool original_reader = false;
