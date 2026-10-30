@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <chrono>
 #include <cstddef>
 #include <map>
 #include <mutex>
@@ -38,6 +39,9 @@ public:
         u16 product{};
         bool button_held{};
         bool moving{};
+        /// Its last report: a dongle's slot stays open when its controller turns off, and a
+        /// device that stopped reporting is no longer one
+        std::chrono::steady_clock::time_point seen{};
     };
     [[nodiscard]] std::vector<Device> GetDevices() const;
 

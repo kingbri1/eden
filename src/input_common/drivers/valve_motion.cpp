@@ -82,8 +82,12 @@ ValveMotion::~ValveMotion() = default;
 std::vector<ValveMotion::Device> ValveMotion::GetDevices() const {
     std::scoped_lock lock{mutex};
     std::vector<Device> out;
+    const auto now = std::chrono::steady_clock::now();
     for (const auto& [path, device] : devices) {
-        out.push_back(device);
+        // (A controller reports hundreds of times a second while on)
+        if (now - device.seen < std::chrono::seconds{2}) {
+            out.push_back(device);
+        }
     }
     return out;
 }
@@ -203,6 +207,7 @@ void ValveMotion::Read(std::stop_token stop, std::string path, std::size_t port,
             device.product = product;
             device.button_held = held;
             device.moving = !zero;
+            device.seen = now;
         }
 
         // Silent (Steam keeps the sensors off unless its layout uses the gyro): ask for them,
