@@ -694,9 +694,10 @@ ConfigurePlayerAssignment::ConfigurePlayerAssignment(QWidget* parent) : QWidget(
     builtin_row = new QGroupBox(tr("Assign Handheld Controller"), this);
     auto* builtin_layout = new QVBoxLayout(builtin_row);
     auto* picker_row = new QHBoxLayout();
-    picker_row->addWidget(new QLabel(tr("Handheld's controller:"), builtin_row));
+    picker_row->addWidget(new QLabel(tr("Handheld input:"), builtin_row));
     builtin_picker = new QComboBox(builtin_row);
     builtin_picker->addItem(tr("Auto-detect"), QString{});
+    builtin_picker->setToolTip(tr("Choose any connected controller as the handheld input."));
     picker_row->addWidget(builtin_picker, 1);
     builtin_identify = new QPushButton(tr("Identify"), builtin_row);
     builtin_identify->setCursor(Qt::PointingHandCursor);
@@ -1127,7 +1128,8 @@ void ConfigurePlayerAssignment::RefreshBuiltin() {
         QString::fromStdString(Settings::values.builtin_pad_steam_handle.GetValue());
     const QString stored =
         steam ? (handle.isEmpty() ? QString{} : QStringLiteral("steamhandle:") + handle) : identity;
-    const bool declared = !steam && Settings::values.builtin_pad_manual.GetValue();
+    const bool declared = steam ? Settings::values.builtin_pad_steam_manual.GetValue()
+                                : Settings::values.builtin_pad_manual.GetValue();
 
     // Keep the picker on a declared pad, else on automatic detection
     const int stored_index = stored.isEmpty() ? -1 : builtin_picker->findData(stored);
@@ -1158,7 +1160,7 @@ void ConfigurePlayerAssignment::RefreshBuiltin() {
         builtin_status->setText(
             tr("Handheld: %1 (%2). %3")
                 .arg(name)
-                .arg(want_index > 0 ? tr("declared") : tr("auto-detected"))
+                .arg(declared ? tr("declared") : tr("auto-detected"))
                 .arg(!detected_name.empty()
                          ? tr("Takes no player while external controllers are connected.")
                          : tr("Not currently connected.")));
@@ -1610,6 +1612,11 @@ void ConfigurePlayerAssignment::RefreshPlayers() {
 }
 
 void ConfigurePlayerAssignment::OnBuiltinPicked(int index) {
+    {
+        auto& state = Common::GetControllerConsoleState();
+        std::scoped_lock lock{state.mutex};
+        state.identify_armed = false;
+    }
     // Picking is the user's say: a removed controller is no longer kept from auto-detect
     Settings::values.builtin_pad_blocked.SetValue(std::string{});
     const QString ident = builtin_picker->itemData(index).toString();
@@ -1617,6 +1624,7 @@ void ConfigurePlayerAssignment::OnBuiltinPicked(int index) {
         // Detect automatically: forget the stored pad, so the engine detects it afresh
         Settings::values.builtin_pad_identity.SetValue(std::string{});
         Settings::values.builtin_pad_steam_handle.SetValue(std::string{});
+        Settings::values.builtin_pad_steam_manual.SetValue(false);
         Settings::values.builtin_pad_manual.SetValue(false);
         return;
     }
@@ -1625,6 +1633,7 @@ void ConfigurePlayerAssignment::OnBuiltinPicked(int index) {
     const QString prefix = QStringLiteral("steamhandle:");
     if (ident.startsWith(prefix)) {
         Settings::values.builtin_pad_steam_handle.SetValue(ident.mid(prefix.size()).toStdString());
+        Settings::values.builtin_pad_steam_manual.SetValue(true);
     } else {
         Settings::values.builtin_pad_identity.SetValue(ident.toStdString());
         Settings::values.builtin_pad_manual.SetValue(true);

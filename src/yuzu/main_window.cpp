@@ -2645,45 +2645,6 @@ bool CouldBeHandheld(Uint16 vendor, Uint16 product) {
     return !IsControllerMaker(vendor);
 }
 
-/// Whether a pad is plainly a standalone controller, never a handheld's built-in controls:
-/// not offered as the handheld's controller. Valve's other controllers, the makers that only
-/// make controllers, and Xbox controllers on Bluetooth or a wireless adapter (their ids differ
-/// from the wired ones); a wired Microsoft id stays, as some handhelds' controls report one
-/// (an Xbox 360 pad, the ROG Xbox Ally). Wireless pads are never built in either.
-bool IsPlainlyStandalone(SDL_JoystickID id) {
-    const Uint16 vendor = PadVendor(id);
-    const Uint16 product = PadProduct(id);
-    if (vendor == 0x28DE) {
-        return product != 0x1205;
-    }
-    if (vendor == 0x045E) {
-        switch (product) {
-        case 0x02E0: // Xbox One S, Bluetooth
-        case 0x02E6: // Xbox Wireless Adapter
-        case 0x02FD: // Xbox One S, Bluetooth
-        case 0x0719: // Xbox 360 wireless receiver
-        case 0x0B05: // Xbox Elite Series 2, Bluetooth
-        case 0x0B13: // Xbox Series X|S, Bluetooth
-        case 0x0B20: // Xbox Series X|S, Bluetooth
-        case 0x0B22: // Xbox Elite Series 2, Bluetooth
-            return true;
-        default:
-            break;
-        }
-    } else if (IsControllerMaker(vendor)) {
-        return true;
-    }
-    const JoystickApiLock lock;
-    SDL_Gamepad* pad = SDL_OpenGamepad(id);
-    if (!pad) {
-        return false;
-    }
-    const bool wireless = SDL_GetJoystickConnectionState(SDL_GetGamepadJoystick(pad)) ==
-                          SDL_JOYSTICK_CONNECTION_WIRELESS;
-    SDL_CloseGamepad(pad);
-    return wireless;
-}
-
 /// True for the controller types Steam reports for standalone controllers
 bool IsStandaloneControllerType(SDL_GamepadType type) {
     return type != SDL_GAMEPAD_TYPE_UNKNOWN && type != SDL_GAMEPAD_TYPE_STANDARD;
@@ -4697,10 +4658,6 @@ void MainWindow::ApplyConsoleControllerMode() {
         std::scoped_lock lock{state.mutex};
         state.pads.clear();
         for (const auto& [id, ident] : live) {
-            // Only pads that could be built in are offered as the handheld's controller
-            if (IsPlainlyStandalone(id)) {
-                continue;
-            }
             // Under Steam every pad shares one GUID identity, so the picker would declare
             // them all at once: its entries carry the Steam handle there instead
             const Uint64 handle = Common::SteamPadsInUse() ? PadSteamHandle(id) : 0;
@@ -4716,8 +4673,7 @@ void MainWindow::ApplyConsoleControllerMode() {
                 state.identify_armed = false;
             } else {
                 for (const auto& [id, ident] : live) {
-                    // (A press on a plainly standalone controller is not the handheld's)
-                    if (PadAnyButtonPressed(id) && !IsPlainlyStandalone(id)) {
+                    if (PadAnyButtonPressed(id)) {
                         state.identify_armed = false;
                         builtin_pad_id = id;
                         builtin_identity = ident;
@@ -4729,6 +4685,7 @@ void MainWindow::ApplyConsoleControllerMode() {
                             if (handle) {
                                 Settings::values.builtin_pad_steam_handle.SetValue(
                                     fmt::format("{:#x}", handle));
+                                Settings::values.builtin_pad_steam_manual.SetValue(true);
                             }
                         } else {
                             Settings::values.builtin_pad_identity.SetValue(ident);
@@ -4760,6 +4717,7 @@ void MainWindow::ApplyConsoleControllerMode() {
             }
             // The identity is the direct launches' own: a Steam pick only sets the handle
             Settings::values.builtin_pad_steam_handle.SetValue(handle);
+            Settings::values.builtin_pad_steam_manual.SetValue(true);
             Settings::values.builtin_pad_identity.SetValue(std::string{});
             Settings::values.builtin_pad_manual.SetValue(false);
             LOG_INFO(Frontend, "console-mode: picker declared Steam handle {} inst={}", handle,
@@ -5010,6 +4968,7 @@ void MainWindow::ApplyConsoleControllerMode() {
             const std::string key = PadKey(builtin_pad_id, live[builtin_pad_id]);
             Settings::values.builtin_pad_blocked.SetValue(key);
             Settings::values.builtin_pad_steam_handle.SetValue(std::string{});
+            Settings::values.builtin_pad_steam_manual.SetValue(false);
             Settings::values.builtin_pad_identity.SetValue(std::string{});
             Settings::values.builtin_pad_manual.SetValue(false);
             builtin_pad_id = 0;
@@ -5022,11 +4981,16 @@ void MainWindow::ApplyConsoleControllerMode() {
     const auto is_blocked = [&](u32 id) {
         return !blocked_key.empty() && live.contains(id) && PadKey(id, live[id]) == blocked_key;
     };
+    if (!Common::SteamPadsInUse()) {
+        const std::string stored = Settings::values.builtin_pad_identity.GetValue();
+        if (stored != builtin_identity) {
+            builtin_pad_id = 0;
+            builtin_identity = stored;
+        }
+    }
     u32 builtin_match_id = 0;
     bool builtin_valid = false;
-    const bool steam_handle_known =
-        Common::SteamPadsInUse() && !Settings::values.builtin_pad_steam_handle.GetValue().empty();
-    if (builtin_pad_id && live.find(builtin_pad_id) != live.end() && !steam_handle_known &&
+    if (builtin_pad_id && live.find(builtin_pad_id) != live.end() && !Common::SteamPadsInUse() &&
         !is_blocked(builtin_pad_id)) {
         builtin_match_id = builtin_pad_id;
         builtin_valid = true;
@@ -5037,6 +5001,7 @@ void MainWindow::ApplyConsoleControllerMode() {
         // sessions (0xff42501d27 in every deck log), so that is the identity. With none
         // stored yet, a lone pad is the handheld's own, and gets latched below.
         const std::string want = Settings::values.builtin_pad_steam_handle.GetValue();
+        const bool manual = Settings::values.builtin_pad_steam_manual.GetValue();
         int count = 0;
         u32 holder = 0;
         if (!want.empty()) {
@@ -5044,7 +5009,7 @@ void MainWindow::ApplyConsoleControllerMode() {
                 if (fmt::format("{:#x}", PadSteamHandle(id)) != want || is_blocked(id)) {
                     continue;
                 }
-                if (!CouldBeHandheld(PadVendor(id), PadProduct(id))) {
+                if (!manual && !CouldBeHandheld(PadVendor(id), PadProduct(id))) {
                     // An earlier build took a standalone controller for the handheld's own
                     LOG_INFO(Frontend,
                              "console-mode: stored handheld {} is a {:04x}:{:04x} "
@@ -5058,7 +5023,7 @@ void MainWindow::ApplyConsoleControllerMode() {
             }
         }
         bool adopted = false;
-        if (count == 0) {
+        if (count == 0 && !manual) {
             // No pad holds the stored handle (Steam may hand out a new one after a reboot or
             // an update), or none is stored yet: the deck's own controller is the one Steam
             // reports with no gamepad type ("#SettingsController_SteamController"), every

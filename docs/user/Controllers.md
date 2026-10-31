@@ -4,6 +4,14 @@ Most of the controls should work out of the box. If not, use a joystick calibrat
 
 - https://github.com/dkosmari/calibrate-joystick
 
+## Choosing the handheld input
+
+In the desktop interface, open **Controls > Controllers**, choose **Modern Console**, and enable **Portable Handheld Gaming Device with Built-in Controller**. Under **Assign Handheld Controller**, the **Handheld input** dropdown lists all connected gamepads, regardless of their vendor or connection type. Select the controller you want to use as the handheld's own controls, or choose **Identify** and press a button on it.
+
+A manual selection overrides automatic handheld detection. The selected controller takes Player 1 when it is the only controller connected and steps aside while external controllers are connected. Choose **Auto-detect** to return to automatic detection.
+
+Automatic detection recognizes a limited set of handheld makers and may miss devices that report themselves as standalone controllers. Manual selection avoids that restriction. Steam Input and direct launches keep separate controller selections.
+
 ## Using external controllers on the Steamdeck
 
 In desktop mode ignore your Pro controller/XBOX controller external controller and use **Steam Virtual Gamepad 0 as Player 1**. If you have multiple external controllers set **Player 2 to Steam Virtual Gamepad 1**. Steam app must not be closed on desktop mode.

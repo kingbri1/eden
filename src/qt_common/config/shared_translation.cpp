@@ -57,6 +57,7 @@ std::unique_ptr<TranslationMap> InitializeTranslations(QObject* parent) {
     INSERT(Settings, builtin_pad_steam_handle, QString(), QString());
     INSERT(Settings, builtin_pad_blocked, QString(), QString());
     INSERT(Settings, builtin_pad_manual, QString(), QString());
+    INSERT(Settings, builtin_pad_steam_manual, QString(), QString());
 
     // Applets
     INSERT(Settings, cabinet_applet_mode, tr("Amiibo editor"), QString());
